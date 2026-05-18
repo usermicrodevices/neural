@@ -1,0 +1,43 @@
+#pragma once
+
+#include <algorithm>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <sstream>
+#include <string>
+
+#include <sqlite3.h>
+
+#include "logger.hpp"
+#include "neural.hpp"
+#include "vocabulary.hpp"
+
+class DocumentStore {
+public:
+    DocumentStore(const std::string& db_path);
+    ~DocumentStore();
+    void initialize_db();
+    void add_document(const std::string& text, std::function<void(int)> progress_cb, bool serialization=false);
+    std::string get_answer(const std::string& prompt, double threshold = CONFIDENCE_THRESHOLD);
+    void add_training_pair(const std::string& question, int chunk_id);
+    void train_on_pairs();
+    static std::string escape_json(const std::string& s);
+    size_t get_memory_usage() const;
+    void serialize();
+
+private:
+    sqlite3* db;
+    std::unique_ptr<Vocabulary> vocab;
+    std::unique_ptr<NeuralNetwork> net;
+    std::mutex mtx_;
+    std::string persistent_path;
+    static constexpr int HIDDEN_SIZE = 128;
+    static constexpr double CONFIDENCE_THRESHOLD = 0.01;
+    void load_state();
+    void save_state();
+    void load_from_persistent();
+    std::vector<std::string> split_into_chunks(const std::string& text);
+    std::string clean_text(const std::string& text);
+};
