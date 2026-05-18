@@ -6,7 +6,7 @@ now it can run as master process with all neural network functional and two chil
 all gui in html over http in browser. admin localhost:8080, client localhost:8081.
 
 ![image](./admin.png "admin")\
-![image](./promt.jpg "client")\
+![image](./promt.png "client")\
 
 
 ### Build System
