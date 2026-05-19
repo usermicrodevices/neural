@@ -2,19 +2,23 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
 
+#include <asio.hpp>
+#include <nlohmann/json.hpp>
+
 #include "logger.hpp"
 
-#include <asio.hpp>
-
+using json = nlohmann::json;
 struct JobPrompt {
     std::string prompt;
     double threshold;
