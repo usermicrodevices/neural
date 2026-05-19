@@ -8,15 +8,23 @@ find_package(fmt REQUIRED)
 find_package(SQLite3 REQUIRED)
 
 include(FetchContent)
+
 FetchContent_Declare(asio
   GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
-  GIT_TAG asio-1-28-0
+  GIT_TAG master
 )
+
 FetchContent_Declare(spdlog
   GIT_REPOSITORY https://github.com/gabime/spdlog.git
-  GIT_TAG v1.17.0
+  GIT_TAG v1.x
 )
-FetchContent_MakeAvailable(asio spdlog)
+
+FetchContent_Declare(nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG develop
+)
+
+FetchContent_MakeAvailable(asio spdlog nlohmann_json)
 
 include_directories(
     include
@@ -37,7 +45,14 @@ add_executable(neural
 )
 
 target_include_directories(neural PRIVATE ${asio_SOURCE_DIR}/include)
-target_link_libraries(neural PRIVATE SQLite::SQLite3 spdlog::spdlog pthread)
+
+target_link_libraries(neural PRIVATE
+    SQLite::SQLite3
+    spdlog::spdlog
+    fmt::fmt
+    nlohmann_json::nlohmann_json
+    pthread
+)
 
 if(MSVC)
     target_compile_options(neural PRIVATE /W4)
