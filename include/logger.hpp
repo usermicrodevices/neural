@@ -14,10 +14,10 @@ public:
         logger_->trace(fmt::runtime("👣"+fmt), args...);
     }
     template<typename... Args> static void Debug(const std::string& fmt, Args... args) {
-        logger_->debug(fmt::runtime("🔧"+fmt), args...);
+        logger_->debug(fmt::runtime("🚧"+fmt), args...);
     }
     template<typename... Args> static void Info(const std::string& fmt, Args... args) {
-        logger_->info(fmt::runtime("❕"+fmt), args...);
+        logger_->info(fmt::runtime("📝"+fmt), args...);
     }
     template<typename... Args> static void Warn(const std::string& fmt, Args... args) {
         logger_->warn(fmt::runtime("⚠️"+fmt), args...);

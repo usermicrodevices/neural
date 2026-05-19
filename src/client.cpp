@@ -76,6 +76,17 @@ static void read_body(asio::ip::tcp::socket& socket, int content_length,
     }
 }
 
+static std::string generate_chat_id() {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_int_distribution<> dis(0, 15);
+    const char* hex = "0123456789abcdef";
+    std::string id = "chatcmpl-";
+    for (int i = 0; i < 24; ++i)
+        id += hex[dis(gen)];
+    return id;
+}
+
 HttpClientSrv::HttpClientSrv(asio::io_context& io, unsigned short port)
     : io_(io), acceptor_(io, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)) {}
 
@@ -118,11 +129,11 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
     try {
         asio::error_code ec;
         std::string headers = read_headers(*s, ec);
-        if (ec) { Logger::Error("Client read headers: {}", ec.message()); return; }
+        if (ec) { Logger::Error("HttpClientSrv::handle_request read headers: {}", ec.message()); return; }
         std::string method, path, version, content_type;
         int content_length = 0;
         parse_request(headers, method, path, version, content_type, content_length);
-        Logger::Info("Client request: {} {}", method, path);
+        Logger::Trace("HttpClientSrv::handle_request: {} {}", method, path);
         auto respond_html = [&](const std::string& body) {
             std::string resp = build_response("text/html", body);
             asio::write(*s, asio::buffer(resp), ec);
@@ -157,6 +168,7 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
     </div>
     <textarea id="promptInput" rows="3" placeholder="Type your question here..."></textarea><br>
     <button id="sendBtn">Send</button>
+    <button id="clearBtn">Clear Chat</button>
     <script>
         const slider = document.getElementById('thresholdSlider');
         const thresholdSpan = document.getElementById('thresholdValue');
@@ -230,6 +242,7 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
             }
         }
         sendBtn.addEventListener('click', askQuestion);
+        document.getElementById('clearBtn').addEventListener('click', () => {document.getElementById('chat').innerHTML = '';});
         promptInput.addEventListener('keypress', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); askQuestion(); } });
         promptInput.focus();
     </script>
@@ -240,13 +253,13 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
         }
         if (method == "POST" && (path == "/" || path == "/ask")) {
             if (content_length <= 0) {
-                Logger::Warn("Client: POST without Content-Length");
+                Logger::Warn("HttpClientSrv::handle_request: POST without Content-Length");
                 respond_html("<html><body><h2>Error: Content-Length required</h2><a href=\"/\">Back</a></body></html>");
                 return;
             }
             std::vector<char> body;
             read_body(*s, content_length, body, ec);
-            if (ec) { Logger::Error("Client body read: {}", ec.message()); return; }
+            if (ec) { Logger::Error("HttpClientSrv::handle_request body read: {}", ec.message()); return; }
             std::string bbody(body.begin(), body.end());
             std::string prompt;
             double threshold = -1.0; // -1 means use default
@@ -273,7 +286,7 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
                 respond_html("<html><body><h2>Error: No prompt provided</h2><a href=\"/\">Back</a></body></html>");
                 return;
             }
-            Logger::Info("Client: prompt '{}'", prompt);
+            Logger::Info("HttpClientSrv::handle_request: prompt '{}'", prompt);
             auto future = enqueue_ask(prompt, threshold);
             try {
                 std::string answer = future.get();
@@ -339,7 +352,7 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
             positive = find_bool("positive");
             question = find_string("question");
             if (chunk_id != -1 && !question.empty()) {
-                Logger::Info("Received feedback: chunk {} positive={} question='{}'", chunk_id, positive, question);
+                Logger::Trace("HttpClientSrv::handle_request: Received feedback: chunk {} positive={} question='{}'", chunk_id, positive, question);
                 uint32_t net_chunk = htonl(chunk_id);
                 std::vector<uint8_t> payload(sizeof(net_chunk));
                 std::memcpy(payload.data(), &net_chunk, 4);
@@ -350,7 +363,80 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
             asio::write(*s, asio::buffer(http_resp), ec);
             return;
         }
+        else if (method == "POST" && path == "/v1/chat") {
+            if (content_length <= 0) {
+                respond_html("<html><body><h2>Error: Content-Length required</h2></body></html>");
+                return;
+            }
+            std::vector<char> body;
+            read_body(*s, content_length, body, ec);
+            if (ec) {
+                Logger::Error("HttpClientSrv::handle_request /v1/chat body read: {}", ec.message());
+                return;
+            }
+            std::string json_body(body.begin(), body.end());
+            Logger::Trace("HttpClientSrv::handle_request JSON: {}", json_body);
+            try {
+                auto req = json::parse(json_body);
+                std::string user_prompt;
+                if (req.contains("messages")) {
+                    for (const auto& msg : req["messages"]) {
+                        if (msg.value("role", "") == "user") {
+                            user_prompt = msg.value("content", "");
+                            break;
+                        }
+                    }
+                }
+                if (user_prompt.empty()) {
+                    throw std::runtime_error("No user message found");
+                }
+                double threshold = 0.001;
+                if (req.contains("confidence_threshold") && req["confidence_threshold"].is_number()) {
+                    double ct = req["confidence_threshold"].get<double>();
+                    threshold = std::max(0.0, std::min(1.0, ct));
+                    if (threshold == 0.0) threshold = 0.0001;
+                    Logger::Trace("HttpClientSrv::handle_request: using direct confidence_threshold {}", threshold);
+                }
+                else {
+                    double temperature = 0.7;
+                    if (req.contains("temperature") && req["temperature"].is_number())
+                        temperature = req["temperature"].get<double>();
+                    threshold = 0.001;
+                    if (temperature >= 0 && temperature <= 1) {
+                        threshold = 1.0 - temperature;
+                        threshold = std::max(0.001, std::min(0.999, threshold));
+                    }
+                    Logger::Trace("HttpClientSrv::handle_request: using temperature {} mapped to threshold {}", temperature, threshold);
+                }
+                auto future = enqueue_ask(user_prompt, threshold);
+                std::string answer_json = future.get();
+                auto ans = json::parse(answer_json);
+                std::string answer_text = ans.value("answer", "No answer");
+                json response;
+                response["id"] = generate_chat_id();
+                response["object"] = "chat.completion";
+                response["created"] = std::chrono::system_clock::now().time_since_epoch().count();
+                response["model"] = req.value("model", "neural");
+                response["choices"] = {
+                    {
+                        {"index", 0},
+                        {"message", {{"role", "assistant"}, {"content", answer_text}}},
+                        {"finish_reason", "stop"}
+                    }
+                };
+                response["usage"] = {{"prompt_tokens", 0}, {"completion_tokens", 0}, {"total_tokens", 0}};
+                std::string resp_body = response.dump();
+                std::string http_resp = build_response("application/json", resp_body);
+                asio::write(*s, asio::buffer(http_resp), ec);
+            } catch (const std::exception& e) {
+                json error;
+                error["error"] = {{"message", e.what()}, {"type", "invalid_request_error"}, {"code", 400}};
+                std::string resp = build_response("application/json", error.dump());
+                asio::write(*s, asio::buffer(resp), ec);
+            }
+            return;
+        }
     } catch (const std::exception& err) {
-        Logger::Error("Client HTTP handler: {}", err.what());
+        Logger::Error("HttpClientSrv::handle_request: {}", err.what());
     }
 }
