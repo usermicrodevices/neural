@@ -15,6 +15,8 @@ DocumentStore::DocumentStore(const std::string& db_path)
 
 DocumentStore::~DocumentStore() { if (db) sqlite3_close(db); }
 
+UploadResult DocumentStore::get_last_upload_result() const { return last_upload_result_; }
+
 void DocumentStore::initialize_db() {
     const char* sql =
     "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY, text TEXT);"
@@ -169,46 +171,75 @@ void DocumentStore::add_document(const std::string& text, std::function<void(int
     Logger::Info("DocumentStore::add_document adding document ({} bytes)", text.size());
     auto chunks = split_into_chunks(text);
     Logger::Info("Split into {} chunks", chunks.size());
-    int old_vocab_size = vocab->size();
+
+    std::vector<std::string> unique_chunks;
+
+    sqlite3_stmt* duplicate_stmt = nullptr;
+    sqlite3_prepare_v2(db, "SELECT 1 FROM chunks WHERE text = ? LIMIT 1", -1, &duplicate_stmt, nullptr);
+    uint duplicate_count = 0;
     for (const auto& raw_ch : chunks) {
+        sqlite3_reset(duplicate_stmt);
+        sqlite3_bind_text(duplicate_stmt, 1, raw_ch.c_str(), -1, SQLITE_TRANSIENT);
+        bool is_duplicate = (sqlite3_step(duplicate_stmt) == SQLITE_ROW);
+        if (!is_duplicate) {
+            unique_chunks.push_back(raw_ch);
+        } else {
+            Logger::Warn("Duplicate chunk skipped: {}", raw_ch.substr(0, 50));
+            duplicate_count++;
+        }
+    }
+    sqlite3_finalize(duplicate_stmt);
+    if (unique_chunks.empty()) {
+        last_upload_result_ = UploadResult::DUPLICATE;
+        Logger::Warn("No new unique chunks – document is entirely duplicate.");
+        return;
+    } else if (duplicate_count > 0) {
+        last_upload_result_ = UploadResult::PARTIAL;
+    } else {
+        last_upload_result_ = UploadResult::OK;
+    }
+
+    int old_vocab_size = vocab->size();
+    for (const auto& raw_ch : unique_chunks) {
         std::string cleaned = clean_text(raw_ch);
         vocab->add_words(cleaned);
     }
     int new_vocab_size = vocab->size();
-    Logger::Info("DocumentStore::add_document vocabulary size: {} -> {}", old_vocab_size, new_vocab_size);
+    Logger::Info("Vocabulary size: {} -> {}", old_vocab_size, new_vocab_size);
+
     int next_id = 0;
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(id),0)+1 FROM chunks", -1, &stmt, nullptr);
     if (sqlite3_step(stmt) == SQLITE_ROW) next_id = sqlite3_column_int(stmt, 0);
     sqlite3_finalize(stmt);
-    for (const auto& raw_ch : chunks) {
+
+    for (const auto& raw_ch : unique_chunks) {
+        std::string cleaned = clean_text(raw_ch);
         sqlite3_prepare_v2(db, "INSERT INTO chunks(id,text) VALUES(?,?)", -1, &stmt, nullptr);
         sqlite3_bind_int(stmt, 1, next_id);
         sqlite3_bind_text(stmt, 2, raw_ch.c_str(), -1, SQLITE_TRANSIENT);
-        int rc = sqlite3_step(stmt);
-        if (rc != SQLITE_DONE) {
-            Logger::Error("DocumentStore::add_document insert chunk failed: {}", sqlite3_errmsg(db));
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            Logger::Error("Insert failed: {}", sqlite3_errmsg(db));
         }
         sqlite3_finalize(stmt);
-        std::string cleaned = clean_text(raw_ch);
         vocab->add_document(cleaned, next_id);
         next_id++;
     }
-    int out_size = 0;
+
+    int total_chunks = 0;
     sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM chunks", -1, &stmt, nullptr);
-    if (sqlite3_step(stmt) == SQLITE_ROW) out_size = sqlite3_column_int(stmt, 0);
+    if (sqlite3_step(stmt) == SQLITE_ROW) total_chunks = sqlite3_column_int(stmt, 0);
     sqlite3_finalize(stmt);
-    Logger::Info("DocumentStore::add_document total chunks in DB: {}", out_size);
+
     if (new_vocab_size > old_vocab_size) {
-        Logger::Trace("DocumentStore::add_document expanding input layer: new vocabulary size {}", new_vocab_size);
         auto new_net = std::make_unique<NeuralNetwork>(new_vocab_size, HIDDEN_SIZE, net->output_size());
         new_net->init_random();
         net = std::move(new_net);
     }
-    if (out_size > net->output_size()) {
-        Logger::Trace("DocumentStore::add_document output size increased from {} to {}, expanding output layer", net->output_size(), out_size);
-        net->expand_outputs(out_size);
+    if (total_chunks > net->output_size()) {
+        net->expand_outputs(total_chunks);
     }
+
     std::vector<std::vector<double>> X;
     std::vector<int> Y;
     sqlite3_prepare_v2(db, "SELECT id, text FROM chunks ORDER BY id", -1, &stmt, nullptr);
@@ -220,21 +251,16 @@ void DocumentStore::add_document(const std::string& text, std::function<void(int
         Y.push_back(id - 1);
     }
     sqlite3_finalize(stmt);
-    Logger::Trace("DocumentStore::add_document training on {} chunks...", X.size());
+
     const int epochs = 100;
     for (int e = 0; e < epochs; ++e) {
         net->train_batch(X, Y, 0.01);
-        int progress = static_cast<int>((e + 1) * 100.0 / epochs);
-        if (progress_cb) progress_cb(progress);
-        if ((e+1) % 10 == 0) Logger::Trace("DocumentStore::add_document training epoch {}/{}", e+1, epochs);
+        if (progress_cb) progress_cb(static_cast<int>((e+1)*100.0/epochs));
     }
-    Logger::Trace("DocumentStore::add_document training complete. Saving state.");
+
     save_state();
-    if (serialization) {
-        serialize();
-    } else {
-        Logger::Warn("DocumentStore::add_document training complete, stay in‑memory only.");
-    }
+    if (serialization) serialize();
+    else Logger::Warn("Stay in‑memory only.");
 }
 
 std::string DocumentStore::get_answer(const std::string& prompt, double threshold) {

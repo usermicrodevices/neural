@@ -22,12 +22,15 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
                             int pct = msg.payload.empty() ? 0 : static_cast<int>(msg.payload[0]);
                             server.update_progress(pct);
                         } else if (msg.cmd == 0x03) {
-                            if (msg.payload.size() >= sizeof(memory_usage))
+                            if (msg.payload.size() >= sizeof(memory_usage) + 1) {
                                 std::memcpy(&memory_usage, msg.payload.data(), sizeof(memory_usage));
-                            server.set_memory_usage(memory_usage);
-                            server.set_training_done();
-                            job.done.set_value();
-                            break;
+                                uint8_t result_byte = msg.payload[sizeof(memory_usage)];
+                                server.set_memory_usage(memory_usage);
+                                server.set_last_file_result(static_cast<int>(result_byte));
+                                server.set_training_done();
+                                job.done.set_value();
+                                break;
+                            }
                         }
                     }
                 } catch (const std::exception& err) {

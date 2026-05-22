@@ -14,6 +14,12 @@
 #include "neural.hpp"
 #include "vocabulary.hpp"
 
+enum UploadResult{
+    OK,
+    PARTIAL,
+    DUPLICATE
+};
+
 class DocumentStore {
 public:
     DocumentStore(const std::string& db_path);
@@ -26,6 +32,7 @@ public:
     static std::string escape_json(const std::string& s);
     size_t get_memory_usage() const;
     void serialize();
+    UploadResult get_last_upload_result() const;
 
 private:
     sqlite3* db;
@@ -36,6 +43,8 @@ private:
     static constexpr int MAX_CHUNK_SIZE = 200000;
     static constexpr int HIDDEN_SIZE = 128;
     static constexpr double CONFIDENCE_THRESHOLD = 0.01;
+    UploadResult last_upload_result_ = UploadResult::OK;
+
     void load_state();
     void save_state();
     void load_from_persistent();

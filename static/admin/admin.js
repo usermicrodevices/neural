@@ -8,6 +8,7 @@ const progressBar = document.getElementById('progressBar');
 const statusDiv = document.getElementById('status');
 const memoryDisplay = document.getElementById('memoryDisplay');
 const fileListContainer = document.getElementById('fileListContainer');
+const statusConsoleDiv = document.getElementById('statusConsole');
 
 let pollInterval = null;
 let currentFileIndex = 0;
@@ -25,6 +26,26 @@ function updateMemoryDisplay(memBytes) {
     if (memBytes !== undefined) {
         const memMB = (memBytes / (1024 * 1024)).toFixed(2);
         memoryDisplay.innerHTML = `🧠 Memory used: ${memMB} MB`;
+    }
+}
+
+function setStatusConsole(message, isError = true) {
+    if (statusConsoleDiv) {
+        statusConsoleDiv.innerHTML = message;
+        if (isError) {
+            statusConsoleDiv.classList.remove('success');
+            statusConsoleDiv.classList.add('error');
+        } else {
+            statusConsoleDiv.classList.remove('error');
+            statusConsoleDiv.classList.add('success');
+        }
+    }
+}
+
+function clearStatusConsole() {
+    if (statusConsoleDiv) {
+        statusConsoleDiv.innerHTML = '';
+        statusConsoleDiv.classList.remove('success', 'error');
     }
 }
 
@@ -84,8 +105,10 @@ function updateFileListDisplay() {
                 statusText = `⚙️ processing ${status.progress}%`;
                 progressBarHtml = `<div class="file-progress-bar"><div class="file-progress-fill" style="width:${status.progress}%;"></div></div>`;
                 break;
-            case 'success': statusClass = 'success'; statusText = '✔️ done'; break;
+            case 'partial': statusClass = 'partial'; statusText = '🔔 partial duplicate'; break;
+            case 'warning': statusClass = 'warning'; statusText = '⚠️ full duplicate'; break;
             case 'error': statusClass = 'error'; statusText = `❌ error: ${status.error || 'unknown'}`; break;
+            case 'success': statusClass = 'success'; statusText = '✔️ done'; break;
             default: statusText = '?';
         }
         html += `<div class="file-item" data-index="${i}">
@@ -119,7 +142,17 @@ async function pollTrainingProgress(fileIndex) {
         statusDiv.innerHTML = `📄 Processing "${filesToProcess[fileIndex].name}" - ${data.progress}%`;
         return true;
     } else {
-        fileStatuses[fileIndex].status = 'success';
+        let statusIcon = 'success';
+        let statusText = '✔️ done';
+        if (data.fileResult === 2) {
+            statusIcon = 'warning';
+            statusText = '⚠️ full duplicate';
+        } else if (data.fileResult === 1) {
+            statusIcon = 'partial';
+            statusText = '🔔 partial duplicate';
+        }
+        fileStatuses[fileIndex].status = statusIcon;
+        fileStatuses[fileIndex].error = (statusIcon !== 'success') ? statusText : '';
         fileStatuses[fileIndex].progress = 100;
         updateFileListDisplay();
 
@@ -194,6 +227,23 @@ async function processAllFiles() {
 
     await fetchProgress();
 
+    const warnings = [];
+    for (let i = 0; i < fileStatuses.length; i++) {
+        const st = fileStatuses[i];
+        if (st.status === 'warning') {
+            warnings.push(`⚠️ "${filesToProcess[i].name}" – full duplicate (no new chunks)`);
+        } else if (st.status === 'partial') {
+            warnings.push(`🔔 "${filesToProcess[i].name}" – partial duplicate (some chunks skipped)`);
+        } else if (st.status === 'error') {
+            warnings.push(`❌ "${filesToProcess[i].name}" – error: ${st.error}`);
+        }
+    }
+    if (warnings.length > 0) {
+        setStatusConsole(warnings.join('<br>'), true);
+    } else {
+        setStatusConsole('✅ All files processed successfully.', false);
+    }
+
     if (serializeCheckbox.checked && allSuccess) {
         statusDiv.innerHTML = '💾 Serializing model to disk...';
         try {
@@ -206,6 +256,7 @@ async function processAllFiles() {
             }
         } catch (err) {
             statusDiv.innerHTML = `⚠️ Learning finished but serialization failed: ${err.message}`;
+            setStatusConsole(`Serialization error: ${err.message}`, true);
         }
     } else if (!allSuccess) {
         statusDiv.innerHTML = '⚠️ Some files failed. See list for details.';
@@ -220,10 +271,6 @@ async function processAllFiles() {
             progressBar.style.width = '0%';
         }
     }, 2000);
-    fileInput.value = '';
-    filesToProcess = [];
-    fileStatuses = [];
-    updateFileListDisplay();
 }
 
 function escapeHtml(str) {
@@ -265,6 +312,7 @@ serializeNowBtn.addEventListener('click', async () => {
         }
     } catch (err) {
         statusDiv.innerHTML = `❌ Serialization error: ${err.message}`;
+        setStatusConsole(`Serialization error: ${err.message}`, true);
     } finally {
         serializeNowBtn.disabled = false;
         await fetchProgress();
@@ -281,6 +329,7 @@ fileInput.addEventListener('change', () => {
     progressContainer.style.display = 'none';
     progressBar.style.width = '0%';
     statusDiv.innerHTML = '';
+    clearStatusConsole();
     const files = Array.from(fileInput.files);
     filesToProcess = files;
     fileStatuses = files.map(() => ({ status: 'pending', error: '', progress: 0 }));
