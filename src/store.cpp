@@ -170,7 +170,10 @@ void DocumentStore::add_document(const std::string& text, std::function<void(int
     auto chunks = split_into_chunks(text);
     Logger::Info("Split into {} chunks", chunks.size());
     int old_vocab_size = vocab->size();
-    for (const auto& ch : chunks) vocab->add_words(ch);
+    for (const auto& raw_ch : chunks) {
+        std::string cleaned = clean_text(raw_ch);
+        vocab->add_words(cleaned);
+    }
     int new_vocab_size = vocab->size();
     Logger::Info("DocumentStore::add_document vocabulary size: {} -> {}", old_vocab_size, new_vocab_size);
     int next_id = 0;
@@ -178,16 +181,17 @@ void DocumentStore::add_document(const std::string& text, std::function<void(int
     sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(id),0)+1 FROM chunks", -1, &stmt, nullptr);
     if (sqlite3_step(stmt) == SQLITE_ROW) next_id = sqlite3_column_int(stmt, 0);
     sqlite3_finalize(stmt);
-    for (const auto& ch : chunks) {
+    for (const auto& raw_ch : chunks) {
         sqlite3_prepare_v2(db, "INSERT INTO chunks(id,text) VALUES(?,?)", -1, &stmt, nullptr);
         sqlite3_bind_int(stmt, 1, next_id);
-        sqlite3_bind_text(stmt, 2, ch.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, raw_ch.c_str(), -1, SQLITE_TRANSIENT);
         int rc = sqlite3_step(stmt);
         if (rc != SQLITE_DONE) {
             Logger::Error("DocumentStore::add_document insert chunk failed: {}", sqlite3_errmsg(db));
         }
         sqlite3_finalize(stmt);
-        vocab->add_document(ch, next_id);
+        std::string cleaned = clean_text(raw_ch);
+        vocab->add_document(cleaned, next_id);
         next_id++;
     }
     int out_size = 0;
@@ -210,8 +214,9 @@ void DocumentStore::add_document(const std::string& text, std::function<void(int
     sqlite3_prepare_v2(db, "SELECT id, text FROM chunks ORDER BY id", -1, &stmt, nullptr);
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         int id = sqlite3_column_int(stmt, 0);
-        std::string txt(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
-        X.push_back(vocab->vectorize(txt));
+        std::string raw_txt(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
+        std::string clean_txt = clean_text(raw_txt);
+        X.push_back(vocab->vectorize(clean_txt));
         Y.push_back(id - 1);
     }
     sqlite3_finalize(stmt);
@@ -227,15 +232,14 @@ void DocumentStore::add_document(const std::string& text, std::function<void(int
     save_state();
     if (serialization) {
         serialize();
-        //Logger::Trace("DocumentStore::add_document training complete and serialized to disk.");
     } else {
         Logger::Warn("DocumentStore::add_document training complete, stay in‑memory only.");
     }
 }
 
 std::string DocumentStore::get_answer(const std::string& prompt, double threshold) {
+    Logger::Trace("DocumentStore::get_answer confidence threshold: {}; question: {}", threshold, prompt);
     std::lock_guard<std::mutex> lock(mtx_);
-    //Logger::Info("DocumentStore::get_answer question: {}", prompt);
     auto vec = vocab->vectorize(prompt);
     if ((int)vec.size() != net->input_size()) {
         Logger::Error("Vocabulary size ({}) != network input size ({}). Reinitializing network.", vec.size(), net->input_size());
@@ -266,29 +270,29 @@ std::string DocumentStore::get_answer(const std::string& prompt, double threshol
 
 std::vector<std::string> DocumentStore::split_into_chunks(const std::string& text) {
     std::vector<std::string> chunks;
-    std::string cleaned = clean_text(text);
-    std::istringstream iss(cleaned);
-    std::string sentence;
-    std::string current;
-    while (std::getline(iss, sentence, '.')) {
-        if (!sentence.empty()) {
-            current += sentence + ".";
-            if (current.size() > 200) {
-                chunks.push_back(current);
-                current.clear();
-            }
+    std::istringstream stream(text);
+    std::string line, current;
+    while (std::getline(stream, line, '\n')) {
+        if (!current.empty() && current.size() + line.size() + 1 > MAX_CHUNK_SIZE) {
+            chunks.push_back(current);
+            current.clear();
         }
+        if (!current.empty()) current += '\n';
+        current += line;
     }
     if (!current.empty()) chunks.push_back(current);
-    if (chunks.empty()) chunks.push_back(cleaned.substr(0, std::min(cleaned.size(), size_t(200))));
+    if (chunks.empty() && !text.empty())
+        chunks.push_back(text);
     return chunks;
 }
 
 std::string DocumentStore::clean_text(const std::string& text) {
     std::string out;
-    for (char c : text) {
-        if (std::isalnum(c) || c == '.' || c == ' ') out += c;
-        else out += ' ';
+    for (unsigned char c : text) {
+        if (std::isalnum(c) || c == '.' || c == ' ')
+            out += static_cast<char>(c);
+        else
+            out += ' ';
     }
     return out;
 }
@@ -365,3 +369,4 @@ size_t DocumentStore::get_memory_usage() const {
     total += net->GetB2().capacity() * sizeof(double);
     return total;
 }
+

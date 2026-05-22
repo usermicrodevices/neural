@@ -1,13 +1,15 @@
+#include "html.hpp"
 #include "client.hpp"
 
-static std::string build_response(const std::string& content_type, const std::string& body) {
-    std::string resp = "HTTP/1.1 200 OK\r\n";
-    resp += "Content-Type: " + content_type + "\r\n";
-    resp += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-    resp += "Connection: close\r\n";
-    resp += "\r\n";
-    resp += body;
-    return resp;
+static std::string generate_chat_id() {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_int_distribution<> dis(0, 15);
+    const char* hex = "0123456789abcdef";
+    std::string id = "chatcmpl-";
+    for (int i = 0; i < 24; ++i)
+        id += hex[dis(gen)];
+    return id;
 }
 
 static std::string url_decode(const std::string& in) {
@@ -23,68 +25,6 @@ static std::string url_decode(const std::string& in) {
         else out += in[i];
     }
     return out;
-}
-
-static std::string read_headers(asio::ip::tcp::socket& socket, asio::error_code& ec) {
-    std::string headers;
-    char c;
-    std::string term = "\r\n\r\n";
-    size_t matched = 0;
-    while (matched < term.size()) {
-        size_t n = socket.read_some(asio::buffer(&c, 1), ec); (void)n;
-        if (ec) return headers;
-        headers += c;
-        if (c == term[matched]) ++matched;
-        else matched = (c == term[0] ? 1 : 0);
-    }
-    if (headers.size() >= 4) headers.resize(headers.size() - 4);
-    return headers;
-}
-
-static void parse_request(const std::string& headers,
-                          std::string& method, std::string& path, std::string& version,
-                          std::string& content_type, int& content_length) {
-    std::istringstream stream(headers);
-    stream >> method >> path >> version;
-    std::string line;
-    while (std::getline(stream, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty()) continue;
-        std::string lower = line;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (lower.rfind("content-type:", 0) == 0) {
-            content_type = line.substr(13);
-            size_t first = content_type.find_first_not_of(" \t");
-            if (first != std::string::npos) content_type = content_type.substr(first);
-        } else if (lower.rfind("content-length:", 0) == 0) {
-            std::string val = line.substr(15);
-            size_t first = val.find_first_not_of(" \t");
-            if (first != std::string::npos) val = val.substr(first);
-            try { content_length = std::stoi(val); } catch (...) { content_length = -1; }
-        }
-    }
-}
-
-static void read_body(asio::ip::tcp::socket& socket, int content_length,
-                      std::vector<char>& body, asio::error_code& ec) {
-    body.resize(content_length);
-    size_t total = 0;
-    while (total < static_cast<size_t>(content_length)) {
-        size_t n = socket.read_some(asio::buffer(body.data() + total, content_length - total), ec);
-        if (ec) return;
-        total += n;
-    }
-}
-
-static std::string generate_chat_id() {
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    static std::uniform_int_distribution<> dis(0, 15);
-    const char* hex = "0123456789abcdef";
-    std::string id = "chatcmpl-";
-    for (int i = 0; i < 24; ++i)
-        id += hex[dis(gen)];
-    return id;
 }
 
 HttpClientSrv::HttpClientSrv(asio::io_context& io, unsigned short port)
@@ -129,128 +69,39 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
     try {
         asio::error_code ec;
         std::string headers = read_headers(*s, ec);
-        if (ec) { Logger::Error("HttpClientSrv::handle_request read headers: {}", ec.message()); return; }
+        if (ec) { Logger::Error("HttpClientSrv::handle_request read headers: {};", ec.message()); return; }
         std::string method, path, version, content_type;
         int content_length = 0;
         parse_request(headers, method, path, version, content_type, content_length);
-        Logger::Trace("HttpClientSrv::handle_request: {} {}", method, path);
+        Logger::Trace("HttpClientSrv::handle_request: {}; {};", method, path);
+        if (method == "GET" && path == "/favicon.ico") {
+            std::string svg = read_file_into_string("static/client/favicon.svg");
+            std::string resp = build_response("image/svg+xml", svg);
+            asio::write(*s, asio::buffer(resp), ec);
+            return;
+        }
+        if (method == "GET" && (path == "/" || path == "/ask")) {
+            if (serve_static_file(*s, "static/client/client.html", ec)) return;
+            std::string resp = build_response("text/plain", "Index not found");
+            asio::write(*s, asio::buffer(resp), ec);
+            return;
+        }
+        if (method == "GET") {
+            if (serve_static_file(*s, path, ec)) {
+                Logger::Trace("HttpClientSrv::handle_request file was served successfully: {}; {};", path, ec.message());
+                return;
+            }
+            if (ec) {
+                Logger::Error("HttpClientSrv::handle_request static file serve: {};", ec.message());
+            }
+            std::string not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            asio::write(*s, asio::buffer(not_found), ec);
+            return;
+        }
         auto respond_html = [&](const std::string& body) {
             std::string resp = build_response("text/html", body);
             asio::write(*s, asio::buffer(resp), ec);
         };
-        if (method == "GET" && (path == "/" || path == "/ask")) {
-            std::string html = R"(<!DOCTYPE html>
-<html>
-<head>
-    <title>AI Knowledge Assistant</title>
-    <style>
-        body { font-family: sans-serif; max-width: 800px; margin: auto; padding: 20px; }
-        #chat { border: 1px solid #ccc; height: 400px; overflow-y: auto; padding: 10px; margin-bottom: 10px; background: #f9f9f9; }
-        .message { margin-bottom: 10px; }
-        .user { color: blue; font-weight: bold; }
-        .assistant { color: green; }
-        .feedback { margin-left: 10px; font-size: 0.8em; cursor: pointer; }
-        .feedback span { margin: 0 5px; }
-        .thumbs-up, .thumbs-down { cursor: pointer; user-select: none; }
-        .thumbs-up:hover, .thumbs-down:hover { opacity: 0.7; }
-        textarea { width: 100%; padding: 8px; }
-        button { padding: 8px 16px; margin-top: 5px; }
-    </style>
-</head>
-<body>
-    <h2>Ask a Question</h2>
-    <div id="chat"></div>
-    <div>
-    <label>Confidence threshold:
-    <input type="range" id="thresholdSlider" min="0" max="1" step="0.0001" value="0.0001" style="width:100%">
-    <span id="thresholdValue">0.0001</span>
-    </label>
-    </div>
-    <textarea id="promptInput" rows="3" placeholder="Type your question here..."></textarea><br>
-    <button id="sendBtn">Send</button>
-    <button id="clearBtn">Clear Chat</button>
-    <script>
-        const slider = document.getElementById('thresholdSlider');
-        const thresholdSpan = document.getElementById('thresholdValue');
-        slider.addEventListener('input', () => {
-            thresholdSpan.textContent = slider.value;
-        });
-        const chatDiv = document.getElementById('chat');
-        const promptInput = document.getElementById('promptInput');
-        const sendBtn = document.getElementById('sendBtn');
-        function addMessage(role, text, chunkId = null) {
-            const msgDiv = document.createElement('div');
-            msgDiv.className = 'message';
-            const roleSpan = document.createElement('span');
-            roleSpan.className = role;
-            roleSpan.textContent = role === 'user' ? 'You: ' : 'Assistant: ';
-            const textSpan = document.createElement('span');
-            textSpan.textContent = text;
-            msgDiv.appendChild(roleSpan);
-            msgDiv.appendChild(textSpan);
-            if (role === 'assistant' && chunkId !== null && chunkId !== -1) {
-                const feedbackSpan = document.createElement('span');
-                feedbackSpan.className = 'feedback';
-                feedbackSpan.innerHTML = ` <span class="thumbs-up" data-chunk="${chunkId}" data-question="">👍</span> <span class="thumbs-down" data-chunk="${chunkId}" data-question="">👎</span>`;
-                msgDiv.appendChild(feedbackSpan);
-            }
-            chatDiv.appendChild(msgDiv);
-            chatDiv.scrollTop = chatDiv.scrollHeight;
-            if (role === 'assistant' && chunkId !== null && chunkId !== -1) {
-                const up = msgDiv.querySelector('.thumbs-up');
-                const down = msgDiv.querySelector('.thumbs-down');
-                const questionText = textSpan.textContent; // or store question separately
-                up.addEventListener('click', () => sendFeedback(chunkId, true, questionText));
-                down.addEventListener('click', () => sendFeedback(chunkId, false, questionText));
-            }
-        }
-        async function sendFeedback(chunkId, isPositive, questionText) {
-            console.log(`Feedback: chunk ${chunkId}, positive=${isPositive}, question=${questionText}`);
-            try {
-                const response = await fetch('/feedback', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chunk_id: chunkId, positive: isPositive, question: questionText })
-                });
-                if (!response.ok) throw new Error('Feedback failed');
-                const result = await response.json();
-                console.log('Feedback saved:', result);
-            } catch (err) {
-                console.error('Feedback error:', err);
-            }
-        }
-        async function askQuestion() {
-            const prompt = promptInput.value.trim();
-            if (!prompt) return;
-            const threshold = slider.value;
-            addMessage('user', prompt);
-            promptInput.value = '';
-            sendBtn.disabled = true;
-            try {
-                const response = await fetch('/ask', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: `prompt=${encodeURIComponent(prompt)}&threshold=${encodeURIComponent(threshold)}`
-                });
-                const data = await response.json();
-                addMessage('assistant', data.answer, data.chunk_id);
-            } catch (err) {
-                addMessage('assistant', 'Error: ' + err.message);
-            } finally {
-                sendBtn.disabled = false;
-                promptInput.focus();
-            }
-        }
-        sendBtn.addEventListener('click', askQuestion);
-        document.getElementById('clearBtn').addEventListener('click', () => {document.getElementById('chat').innerHTML = '';});
-        promptInput.addEventListener('keypress', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); askQuestion(); } });
-        promptInput.focus();
-    </script>
-</body>
-</html>)";
-            respond_html(html);
-            return;
-        }
         if (method == "POST" && (path == "/" || path == "/ask")) {
             if (content_length <= 0) {
                 Logger::Warn("HttpClientSrv::handle_request: POST without Content-Length");
@@ -262,7 +113,7 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
             if (ec) { Logger::Error("HttpClientSrv::handle_request body read: {}", ec.message()); return; }
             std::string bbody(body.begin(), body.end());
             std::string prompt;
-            double threshold = -1.0; // -1 means use default
+            double threshold = -1.0; // -1 use default
             auto pos = bbody.find("prompt=");
             if (pos != std::string::npos) {
                 prompt = bbody.substr(pos + 7);
@@ -440,3 +291,4 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
         Logger::Error("HttpClientSrv::handle_request: {}", err.what());
     }
 }
+
