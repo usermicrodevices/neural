@@ -45,8 +45,14 @@ void WorkerMaster::run() {
                         };
                         store_->add_document(data, progress_cb, serialize_flag);
                         size_t mem_usage = store_->get_memory_usage();
-                        std::vector<uint8_t> done_payload(sizeof(mem_usage));
+                        ///////////////////////////////////////////////
+                        UploadResult res = store_->get_last_upload_result();
+                        std::vector<uint8_t> done_payload(sizeof(mem_usage) + 1);
                         std::memcpy(done_payload.data(), &mem_usage, sizeof(mem_usage));
+                        done_payload[sizeof(mem_usage)] = static_cast<uint8_t>(res);
+                        ///////////////////////////////////////////////
+                        //std::vector<uint8_t> done_payload(sizeof(mem_usage));
+                        //std::memcpy(done_payload.data(), &mem_usage, sizeof(mem_usage));
                         admin_sock_->send(Message{0x03, done_payload});
                         break;
                     }

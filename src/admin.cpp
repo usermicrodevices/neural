@@ -16,6 +16,18 @@ void HttpAdminSrv::stop() {
     if (thread_.joinable()) thread_.join();
 }
 
+void HttpAdminSrv::set_last_file_result(int result) {
+    std::lock_guard<std::mutex> lock(result_mtx_);
+    last_file_result_ = result;
+}
+
+int HttpAdminSrv::get_and_clear_last_file_result() {
+    std::lock_guard<std::mutex> lock(result_mtx_);
+    int res = last_file_result_;
+    last_file_result_ = 0;
+    return res;
+}
+
 std::future<void> HttpAdminSrv::enqueue_learn(const std::vector<uint8_t>& data) {
     std::promise<void> p; auto f = p.get_future();
     JobAdmin job;
@@ -80,6 +92,10 @@ void HttpAdminSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
             if (!is_training_) {
                 std::lock_guard<std::mutex> mem_lock(mem_mtx_);
                 json += ",\"memory\":" + std::to_string(memory_usage_);
+            }
+            int fres = get_and_clear_last_file_result();
+            if (fres != 0) {
+                json += ",\"fileResult\":" + std::to_string(fres);
             }
             json += "}";
             std::string resp = build_response("application/json", json);

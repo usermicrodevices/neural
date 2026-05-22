@@ -15,6 +15,8 @@ DocumentStore::DocumentStore(const std::string& db_path)
 
 DocumentStore::~DocumentStore() { if (db) sqlite3_close(db); }
 
+UploadResult DocumentStore::get_last_upload_result() const { return last_upload_result_; }
+
 void DocumentStore::initialize_db() {
     const char* sql =
     "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY, text TEXT);"
@@ -171,8 +173,10 @@ void DocumentStore::add_document(const std::string& text, std::function<void(int
     Logger::Info("Split into {} chunks", chunks.size());
 
     std::vector<std::string> unique_chunks;
+
     sqlite3_stmt* duplicate_stmt = nullptr;
     sqlite3_prepare_v2(db, "SELECT 1 FROM chunks WHERE text = ? LIMIT 1", -1, &duplicate_stmt, nullptr);
+    uint duplicate_count = 0;
     for (const auto& raw_ch : chunks) {
         sqlite3_reset(duplicate_stmt);
         sqlite3_bind_text(duplicate_stmt, 1, raw_ch.c_str(), -1, SQLITE_TRANSIENT);
@@ -181,12 +185,18 @@ void DocumentStore::add_document(const std::string& text, std::function<void(int
             unique_chunks.push_back(raw_ch);
         } else {
             Logger::Warn("Duplicate chunk skipped: {}", raw_ch.substr(0, 50));
+            duplicate_count++;
         }
     }
     sqlite3_finalize(duplicate_stmt);
     if (unique_chunks.empty()) {
+        last_upload_result_ = UploadResult::DUPLICATE;
         Logger::Warn("No new unique chunks – document is entirely duplicate.");
         return;
+    } else if (duplicate_count > 0) {
+        last_upload_result_ = UploadResult::PARTIAL;
+    } else {
+        last_upload_result_ = UploadResult::OK;
     }
 
     int old_vocab_size = vocab->size();

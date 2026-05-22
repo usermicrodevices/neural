@@ -39,6 +39,8 @@ public:
     std::future<void> enqueue_serialize();
     bool dequeue_serialize(std::promise<void>& promise);
     bool dequeue(JobAdmin& job);
+    void set_last_file_result(int result);
+    int get_and_clear_last_file_result();
 
 private:
     asio::io_context& io_;
@@ -53,6 +55,8 @@ private:
     mutable std::mutex progress_mtx_;
     size_t memory_usage_ = 0;
     mutable std::mutex mem_mtx_;
+    int last_file_result_ = 0;
+    std::mutex result_mtx_;
 
     void do_accept();
     void handle_request(std::shared_ptr<asio::ip::tcp::socket> sock);
