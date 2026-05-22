@@ -79,25 +79,19 @@ void NeuralNetwork::train_batch(const std::vector<std::vector<double>>& inputs,
             return;
         }
     }
-
     unsigned int num_threads = std::max(1u, std::thread::hardware_concurrency());
-    // Each thread will compute local gradients for a subset of samples
     std::vector<std::vector<double>> dW1_local(num_threads, std::vector<double>(in * hn, 0.0));
     std::vector<std::vector<double>> db1_local(num_threads, std::vector<double>(hn, 0.0));
     std::vector<std::vector<double>> dW2_local(num_threads, std::vector<double>(hn * out, 0.0));
     std::vector<std::vector<double>> db2_local(num_threads, std::vector<double>(out, 0.0));
-
     auto worker = [&](int tid, int start, int end) {
         std::vector<double> dW1(in * hn, 0.0);
         std::vector<double> db1(hn, 0.0);
         std::vector<double> dW2(hn * out, 0.0);
         std::vector<double> db2(out, 0.0);
-
         for (int n = start; n < end; ++n) {
             const auto& x = inputs[n];
             int y = labels[n];
-
-            // Forward
             std::vector<double> h(hn, 0.0);
             for (int j = 0; j < hn; ++j) {
                 double sum = b1[j];
@@ -110,9 +104,8 @@ void NeuralNetwork::train_batch(const std::vector<std::vector<double>>& inputs,
                 for (int j = 0; j < hn; ++j) sum += W2[j * out + k] * h[j];
                 scores[k] = sum;
             }
-            softmax(scores); // modifies scores in place
+            softmax(scores);
 
-            // Backward for this sample
             for (int k = 0; k < out; ++k) {
                 double grad = scores[k] - (k == y ? 1.0 : 0.0);
                 db2[k] += grad;
@@ -126,15 +119,11 @@ void NeuralNetwork::train_batch(const std::vector<std::vector<double>>& inputs,
                 for (int i = 0; i < in; ++i) dW1[i * hn + j] += grad * x[i];
             }
         }
-
-        // Copy local gradients into the global arrays
         dW1_local[tid] = std::move(dW1);
         db1_local[tid] = std::move(db1);
         dW2_local[tid] = std::move(dW2);
         db2_local[tid] = std::move(db2);
     };
-
-    // Partition samples among threads
     std::vector<std::thread> threads;
     int chunk_size = (N + num_threads - 1) / num_threads;
     for (unsigned int t = 0; t < num_threads; ++t) {
@@ -144,8 +133,6 @@ void NeuralNetwork::train_batch(const std::vector<std::vector<double>>& inputs,
         threads.emplace_back(worker, t, start, end);
     }
     for (auto& th : threads) th.join();
-
-    // Aggregate gradients from all threads
     std::vector<double> dW1_total(in * hn, 0.0);
     std::vector<double> db1_total(hn, 0.0);
     std::vector<double> dW2_total(hn * out, 0.0);
@@ -156,8 +143,6 @@ void NeuralNetwork::train_batch(const std::vector<std::vector<double>>& inputs,
         for (size_t i = 0; i < dW2_total.size(); ++i) dW2_total[i] += dW2_local[t][i];
         for (size_t i = 0; i < db2_total.size(); ++i) db2_total[i] += db2_local[t][i];
     }
-
-    // Update weights (same as before)
     double scale = lr / N;
     for (int j = 0; j < hn; ++j) {
         b1[j] -= scale * db1_total[j];

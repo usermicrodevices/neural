@@ -33,6 +33,7 @@ private:
     std::unique_ptr<NeuralNetwork> net;
     std::mutex mtx_;
     std::string persistent_path;
+    static constexpr int MAX_CHUNK_SIZE = 200000;
     static constexpr int HIDDEN_SIZE = 128;
     static constexpr double CONFIDENCE_THRESHOLD = 0.01;
     void load_state();
