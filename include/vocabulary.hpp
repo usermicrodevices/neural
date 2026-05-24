@@ -17,7 +17,7 @@ struct ChunkTF {
 
 class Vocabulary {
 public:
-    static constexpr int MAX_VOCAB = 1000;
+    static constexpr int MAX_VOCAB = 100000;
     Vocabulary();
     void clear();
     int add_words(const std::string& text);

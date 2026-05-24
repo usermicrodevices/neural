@@ -1,7 +1,7 @@
 #include "worker_master.hpp"
 
 WorkerMaster::WorkerMaster() : running_(true) {
-    store_ = std::make_unique<DocumentStore>("knowledge.db");
+    store_ = std::make_unique<DocumentStore>("data.db");
     createSocketpairs();
     spawnWorkers();
 }
@@ -19,14 +19,8 @@ void WorkerMaster::createSocketpairs() {
 
 void WorkerMaster::spawnWorkers() {
     size_t mem_usage = store_->get_memory_usage();
-    //Logger::Info("WorkerMaster::spawnWorkers: neural memory usage = {}", mem_usage);
-    admin_worker_ = std::make_unique<WorkerAdmin>(admin_sv_[1],
-                                                  admin_sv_[0],
-                                                  client_sv_[0],
-                                                  mem_usage);
-    client_worker_ = std::make_unique<WorkerClient>(client_sv_[1],
-                                                    admin_sv_[0],
-                                                    client_sv_[0]);
+    admin_worker_ = std::make_unique<WorkerAdmin>(admin_sv_[1], admin_sv_[0], client_sv_[0], mem_usage);
+    client_worker_ = std::make_unique<WorkerClient>(client_sv_[1], admin_sv_[0], client_sv_[0]);
 }
 
 void WorkerMaster::run() {
@@ -39,34 +33,34 @@ void WorkerMaster::run() {
                     case 0x01: {
                         if (msg.payload.size() < 1) continue;
                         bool serialize_flag = (msg.payload[0] != 0);
-                        std::string data(msg.payload.begin() + 1, msg.payload.end());
+                        auto delim_it = std::find(msg.payload.begin() + 1, msg.payload.end(), 0);
+                        if (delim_it == msg.payload.end()) {
+                            Logger::Error("WorkerMaster::run admin thread: invalid payload (missing delimiter)");
+                            break;
+                        }
+                        size_t delim = delim_it - msg.payload.begin();
+                        std::string tags(msg.payload.begin() + 1, msg.payload.begin() + delim);
+                        std::string data(msg.payload.begin() + delim + 1, msg.payload.end());
                         auto progress_cb = [this](int pct) {
                             admin_sock_->send(Message{0x02, {static_cast<uint8_t>(pct)}});
                         };
-                        store_->add_document(data, progress_cb, serialize_flag);
+                        store_->add_document(data, tags, progress_cb, serialize_flag);
                         size_t mem_usage = store_->get_memory_usage();
-                        ///////////////////////////////////////////////
                         UploadResult res = store_->get_last_upload_result();
                         std::vector<uint8_t> done_payload(sizeof(mem_usage) + 1);
                         std::memcpy(done_payload.data(), &mem_usage, sizeof(mem_usage));
                         done_payload[sizeof(mem_usage)] = static_cast<uint8_t>(res);
-                        ///////////////////////////////////////////////
-                        //std::vector<uint8_t> done_payload(sizeof(mem_usage));
-                        //std::memcpy(done_payload.data(), &mem_usage, sizeof(mem_usage));
                         admin_sock_->send(Message{0x03, done_payload});
                         break;
                     }
                     case 0x08: {
-                        //Logger::Trace("Master: received CMD_SERIALIZE, payload size={}", msg.payload.size());
                         store_->serialize();
-                        //Logger::Trace("Master: serialize() completed");
                         admin_sock_->send(Message{0x09, {}});
-                        //Logger::Trace("Master: sent ACK");
                         break;
                     }
                 }
             } catch (const std::exception& err) {
-                Logger::Error("Admin thread error: {}", err.what());
+                Logger::Error("WorkerMaster::run admin thread error: {}", err.what());
                 running = false;
             }
         }
@@ -88,8 +82,9 @@ void WorkerMaster::run() {
                     int chunk_id = 0;
                     std::memcpy(&chunk_id, msg.payload.data(), 4);
                     chunk_id = ntohl(chunk_id);
-                    std::string question(msg.payload.begin() + 4, msg.payload.end());
-                    store_->add_training_pair(question, chunk_id);
+                    std::string tag(msg.payload.begin() + 4, msg.payload.end());
+                    std::replace(tag.begin(), tag.end(), ' ', '_');
+                    store_->add_tag(tag, chunk_id);
                     client_sock_->send(Message{0x07, {}});
                 }
             } catch (const std::exception& err) {

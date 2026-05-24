@@ -14,7 +14,22 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
         switch(job.type){
             case JobAdmin::LEARN: {
                 try {
-                    sock.send(Message{0x01, job.data});
+                    if (job.data.size() >= 3) {
+                        uint8_t serialize_flag = job.data[0];
+                        uint16_t tag_len = ntohs(*(uint16_t*)&job.data[1]);
+                        if (job.data.size() < 3 + tag_len)
+                            throw std::runtime_error("Invalid LEARN payload: insufficient data");
+                        std::string tags(job.data.begin()+3, job.data.begin()+3+tag_len);
+                        std::string data(job.data.begin()+3+tag_len, job.data.end());
+                        // Re‑pack for the master [flag][tags][data] with a delimiter
+                        std::vector<uint8_t> master_payload;
+                        master_payload.push_back(serialize_flag);
+                        master_payload.insert(master_payload.end(), tags.begin(), tags.end());
+                        master_payload.push_back(0); // delimiter
+                        master_payload.insert(master_payload.end(), data.begin(), data.end());
+                        sock.send(Message{0x01, master_payload});
+                    } else
+                        sock.send(Message{0x01, job.data});
                     server.set_training_started();
                     while (true) {
                         Message msg = sock.recv();
@@ -39,17 +54,13 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
                 break;
             }
             case JobAdmin::SERIALIZE: {
-                //Logger::Trace("WorkerAdmin: processing SERIALIZE job");
                 try {
-                    //Logger::Trace("WorkerAdmin: sending CMD_SERIALIZE (0x08) with empty payload");
                     sock.send(Message{0x08, {}});
-                    //Logger::Trace("WorkerAdmin: message sent, waiting for ACK");
                     Message ack = sock.recv();
-                    //Logger::Trace("WorkerAdmin: received ACK, cmd={}, payload size={}", (int)ack.cmd, ack.payload.size());
                     if (ack.cmd == 0x09) {
                         job.done.set_value();
-                        //Logger::Trace("WorkerAdmin: promise set");
                     } else {
+                        Logger::Error("WorkerAdmin::runChild unexpected response {:02X}", static_cast<unsigned>(ack.cmd));
                         throw std::runtime_error("unexpected response");
                     }
                 } catch (const std::exception& err) {

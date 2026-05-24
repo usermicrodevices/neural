@@ -136,10 +136,27 @@ void HttpAdminSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
                 respond_html("<html><body><h2>Error: No document content received</h2></body></html>");
                 return;
             }
-            Logger::Info("HttpAdminSrv::handle_request: document received bytes {}", data.size());
+            Logger::Trace("HttpAdminSrv::handle_request: document received bytes {};", data.size());
+            std::string tags;
+            size_t pos = 0;
+            while ((pos = bbody.find("name=\"tags\"", pos)) != std::string::npos) {
+                size_t start = bbody.find("\r\n\r\n", pos);
+                if (start != std::string::npos) {
+                    start += 4;
+                    size_t end = bbody.find(boundary, start);
+                    if (end != std::string::npos) {
+                        tags = bbody.substr(start, end - start);
+                        while (!tags.empty() && (tags.back() == '\r' || tags.back() == '\n'))
+                            tags.pop_back();
+                        break;
+                    }
+                }
+                pos = start;
+            }
+            Logger::Trace("HttpAdminSrv::handle_request: tags received {};", tags);
             bool serialize_flag = true;
             std::string serialize_value;
-            size_t pos = 0;
+            pos = 0;
             while ((pos = bbody.find("name=\"serialize\"", pos)) != std::string::npos) {
                 size_t start = bbody.find("\r\n\r\n", pos);
                 if (start != std::string::npos) {
@@ -157,6 +174,9 @@ void HttpAdminSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
             }
             std::vector<uint8_t> payload;
             payload.push_back(serialize_flag ? 1 : 0);
+            uint16_t tag_len = htons(tags.size());
+            payload.insert(payload.end(), (uint8_t*)&tag_len, (uint8_t*)&tag_len + 2);
+            payload.insert(payload.end(), tags.begin(), tags.end());
             payload.insert(payload.end(), data.begin(), data.end());
             auto future = enqueue_learn(payload);
             std::thread([this, future = std::move(future), s]() mutable {

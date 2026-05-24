@@ -102,22 +102,45 @@ button:disabled { background: #94a3b8; cursor: not-allowed; }
     background: #3b82f6;
     transition: width 0.2s;
 }
+.file-tags {
+    margin-top: 0.25rem;
+    width: 100%;
+}
+.tag-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    font-family: inherit;
+}
+.tag-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59,130,246,0.1);
+}
+.status { margin: 0.75rem 0; font-size: 0.9rem; }
 .status-console {
     margin: 0.75rem 0;
     padding: 0.75rem 1rem;
     border-radius: 0.5rem;
     font-size: 0.9rem;
-    background: #fef2f2;
-    border-left: 4px solid #b91c1c;
-    color: #b91c1c;
+    background: #f1f5f9;
+    border-left: 4px solid #64748b;
+    color: #0f172a;
     transition: all 0.2s;
+}
+.status-console.error {
+    background: #fef2f2;
+    border-left-color: #b91c1c;
+    color: #b91c1c;
 }
 .status-console.success {
     background: #f0fdf4;
     border-left-color: #16a34a;
     color: #166534;
 }
-.status { margin: 0.75rem 0; font-size: 0.9rem; }
 hr { margin: 1rem 0; border: none; border-top: 1px solid #e2e8f0; }
 .flex-row {
     display: flex;
@@ -130,25 +153,25 @@ hr { margin: 1rem 0; border: none; border-top: 1px solid #e2e8f0; }
 </head>
 <body>
 <div class="card">
-    <h2>🧠 Upload Documents for Learning</h2>
+    <h2>🎓 Upload Documents for Learning 📚</h2>
     <div class="memory-info" id="memoryDisplay">Memory: -- MB</div>
     <form id="uploadForm">
         <label for="fileInput">Choose text files (txt, cpp, hpp, py, html, js, json, xml, etc.)</label>
         <input type="file" id="fileInput" name="files" multiple required>
         <div class="file-list" id="fileListContainer"></div>
         <div class="flex-row">
-            <label><input type="checkbox" id="serializeCheckbox"> Serialize to disk after all files</label>
-            <button type="button" id="serializeNowBtn">💾 Serialize Now</button>
+            <label><input type="checkbox" id="serializeCheckbox"> Serialize to disk after every file</label>
+            <button type="button" id="serializeNowBtn">💾 Save Now 💽</button>
         </div>
         <div class="flex-row">
-            <button type="submit" id="submitBtn">🧠 Learn All 🧠</button>
+            <button type="submit" id="submitBtn">👨‍🎓 Learn All 📝</button>
+            <div class="status" id="status"></div>
         </div>
     </form>
     <div class="progress-container" id="progressContainer">
         <div class="progress-bar" id="progressBar">0%</div>
     </div>
     <div id="statusConsole" class="status-console"></div>
-    <div class="status" id="status"></div>
 </div>
 <script src="static/admin/admin.js"></script>
 </body>
