@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 
@@ -25,14 +26,13 @@ public:
     DocumentStore(const std::string& db_path);
     ~DocumentStore();
     void initialize_db();
-    void add_document(const std::string& text, std::function<void(int)> progress_cb, bool serialization=false);
+    void add_document(const std::string& text, const std::string& tags, std::function<void(int)> progress_cb, bool serialization=false);
     std::string get_answer(const std::string& prompt, double threshold = CONFIDENCE_THRESHOLD);
-    void add_training_pair(const std::string& question, int chunk_id);
-    void train_on_pairs();
     static std::string escape_json(const std::string& s);
     size_t get_memory_usage() const;
     void serialize();
     UploadResult get_last_upload_result() const;
+    void add_tag(const std::string& tag, int chunk_id);
 
 private:
     sqlite3* db;

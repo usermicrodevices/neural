@@ -22,11 +22,7 @@ void DocumentStore::initialize_db() {
     "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY, text TEXT);"
     "CREATE TABLE IF NOT EXISTS vocab (word TEXT PRIMARY KEY, idx INTEGER, df INTEGER);"
     "CREATE TABLE IF NOT EXISTS model (layer INTEGER, weights BLOB, biases BLOB);"
-    "CREATE TABLE IF NOT EXISTS training_pairs ("
-    "   id INTEGER PRIMARY KEY AUTOINCREMENT,"
-    "   question TEXT, chunk_id INTEGER,"
-    "   created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
-    ");";
+    "CREATE TABLE IF NOT EXISTS chunk_tags (chunk_id INTEGER, tag TEXT, PRIMARY KEY (chunk_id, tag));";
     char* errmsg = nullptr;
     if (sqlite3_exec(db, sql, nullptr, nullptr, &errmsg) != SQLITE_OK) {
         std::string error = errmsg;
@@ -166,71 +162,92 @@ void DocumentStore::save_state() {
     save_layer(2, net->GetW2(), net->GetB2());
 }
 
-void DocumentStore::add_document(const std::string& text, std::function<void(int)> progress_cb, bool serialization) {
+void DocumentStore::add_document(const std::string& text, const std::string& tags,
+                                 std::function<void(int)> progress_cb, bool serialization) {
     std::lock_guard<std::mutex> lock(mtx_);
-    Logger::Info("DocumentStore::add_document adding document ({} bytes)", text.size());
-    auto chunks = split_into_chunks(text);
-    Logger::Info("Split into {} chunks", chunks.size());
-
+    Logger::Trace("DocumentStore::add_document adding document ({} bytes)", text.size());
+    auto raw_chunks = split_into_chunks(text);
+    Logger::Trace("DocumentStore::add_document split into {} chunks", raw_chunks.size());
+    std::vector<std::string> tag_phrases;
+    std::stringstream ss(tags);
+    std::string tag;
+    while (std::getline(ss, tag, ';')) {
+        size_t first = tag.find_first_not_of(" \t\n\r");
+        if (first == std::string::npos) continue;
+        size_t last = tag.find_last_not_of(" \t\n\r");
+        tag = tag.substr(first, last - first + 1);
+        if (tag.empty()) continue;
+        std::replace(tag.begin(), tag.end(), ' ', '_');
+        tag_phrases.push_back(tag);
+    }
     std::vector<std::string> unique_chunks;
-
     sqlite3_stmt* duplicate_stmt = nullptr;
     sqlite3_prepare_v2(db, "SELECT 1 FROM chunks WHERE text = ? LIMIT 1", -1, &duplicate_stmt, nullptr);
     uint duplicate_count = 0;
-    for (const auto& raw_ch : chunks) {
+    for (const auto& raw_ch : raw_chunks) {
         sqlite3_reset(duplicate_stmt);
         sqlite3_bind_text(duplicate_stmt, 1, raw_ch.c_str(), -1, SQLITE_TRANSIENT);
         bool is_duplicate = (sqlite3_step(duplicate_stmt) == SQLITE_ROW);
         if (!is_duplicate) {
             unique_chunks.push_back(raw_ch);
         } else {
-            Logger::Warn("Duplicate chunk skipped: {}", raw_ch.substr(0, 50));
+            Logger::Warn("DocumentStore::add_document duplicate chunk skipped: {}", raw_ch.substr(0, 10));
             duplicate_count++;
         }
     }
     sqlite3_finalize(duplicate_stmt);
     if (unique_chunks.empty()) {
         last_upload_result_ = UploadResult::DUPLICATE;
-        Logger::Warn("No new unique chunks – document is entirely duplicate.");
+        Logger::Warn("DocumentStore::add_document document is full duplicate.");
         return;
     } else if (duplicate_count > 0) {
         last_upload_result_ = UploadResult::PARTIAL;
     } else {
         last_upload_result_ = UploadResult::OK;
     }
-
+    for (const auto& tp : tag_phrases) {
+        std::string cleaned_tag = clean_text(tp);
+        vocab->add_words(cleaned_tag);
+    }
     int old_vocab_size = vocab->size();
     for (const auto& raw_ch : unique_chunks) {
         std::string cleaned = clean_text(raw_ch);
         vocab->add_words(cleaned);
     }
     int new_vocab_size = vocab->size();
-    Logger::Info("Vocabulary size: {} -> {}", old_vocab_size, new_vocab_size);
-
+    Logger::Trace("DocumentStore::add_document vocabulary size: {} -> {}", old_vocab_size, new_vocab_size);
     int next_id = 0;
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(id),0)+1 FROM chunks", -1, &stmt, nullptr);
     if (sqlite3_step(stmt) == SQLITE_ROW) next_id = sqlite3_column_int(stmt, 0);
     sqlite3_finalize(stmt);
-
+    sqlite3_stmt* insert_chunk = nullptr;
+    sqlite3_prepare_v2(db, "INSERT INTO chunks(id, text) VALUES(?,?)", -1, &insert_chunk, nullptr);
+    sqlite3_stmt* insert_tag = nullptr;
+    sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO chunk_tags(chunk_id, tag) VALUES(?,?)", -1, &insert_tag, nullptr);
     for (const auto& raw_ch : unique_chunks) {
-        std::string cleaned = clean_text(raw_ch);
-        sqlite3_prepare_v2(db, "INSERT INTO chunks(id,text) VALUES(?,?)", -1, &stmt, nullptr);
-        sqlite3_bind_int(stmt, 1, next_id);
-        sqlite3_bind_text(stmt, 2, raw_ch.c_str(), -1, SQLITE_TRANSIENT);
-        if (sqlite3_step(stmt) != SQLITE_DONE) {
-            Logger::Error("Insert failed: {}", sqlite3_errmsg(db));
+        sqlite3_bind_int(insert_chunk, 1, next_id);
+        sqlite3_bind_text(insert_chunk, 2, raw_ch.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(insert_chunk) != SQLITE_DONE) {
+            Logger::Error("DocumentStore::add_document insert failed: {}", sqlite3_errmsg(db));
         }
-        sqlite3_finalize(stmt);
+        sqlite3_reset(insert_chunk);
+        for (const auto& tp : tag_phrases) {
+            sqlite3_bind_int(insert_tag, 1, next_id);
+            sqlite3_bind_text(insert_tag, 2, tp.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(insert_tag);
+            sqlite3_reset(insert_tag);
+        }
+        std::string cleaned = clean_text(raw_ch);
         vocab->add_document(cleaned, next_id);
         next_id++;
     }
-
+    sqlite3_finalize(insert_chunk);
+    sqlite3_finalize(insert_tag);
     int total_chunks = 0;
     sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM chunks", -1, &stmt, nullptr);
     if (sqlite3_step(stmt) == SQLITE_ROW) total_chunks = sqlite3_column_int(stmt, 0);
     sqlite3_finalize(stmt);
-
     if (new_vocab_size > old_vocab_size) {
         auto new_net = std::make_unique<NeuralNetwork>(new_vocab_size, HIDDEN_SIZE, net->output_size());
         new_net->init_random();
@@ -239,42 +256,87 @@ void DocumentStore::add_document(const std::string& text, std::function<void(int
     if (total_chunks > net->output_size()) {
         net->expand_outputs(total_chunks);
     }
-
     std::vector<std::vector<double>> X;
     std::vector<int> Y;
     sqlite3_prepare_v2(db, "SELECT id, text FROM chunks ORDER BY id", -1, &stmt, nullptr);
+    sqlite3_stmt* tag_stmt = nullptr;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         int id = sqlite3_column_int(stmt, 0);
         std::string raw_txt(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
         std::string clean_txt = clean_text(raw_txt);
-        X.push_back(vocab->vectorize(clean_txt));
+        auto vec = vocab->vectorize(clean_txt);
+        sqlite3_prepare_v2(db, "SELECT tag FROM chunk_tags WHERE chunk_id=?", -1, &tag_stmt, nullptr);
+        sqlite3_bind_int(tag_stmt, 1, id);
+        while (sqlite3_step(tag_stmt) == SQLITE_ROW) {
+            std::string tag_str(reinterpret_cast<const char*>(sqlite3_column_text(tag_stmt, 0)));
+            auto tag_vec = vocab->vectorize(tag_str);
+            for (size_t i = 0; i < vec.size(); ++i) vec[i] += tag_vec[i];
+        }
+        sqlite3_finalize(tag_stmt);
+        X.push_back(vec);
         Y.push_back(id - 1);
     }
     sqlite3_finalize(stmt);
-
     const int epochs = 100;
     for (int e = 0; e < epochs; ++e) {
         net->train_batch(X, Y, 0.01);
         if (progress_cb) progress_cb(static_cast<int>((e+1)*100.0/epochs));
     }
-
     save_state();
     if (serialization) serialize();
-    else Logger::Warn("Stay in‑memory only.");
+    else Logger::Warn("DocumentStore::add_document stay in‑memory only.");
 }
 
 std::string DocumentStore::get_answer(const std::string& prompt, double threshold) {
     Logger::Trace("DocumentStore::get_answer confidence threshold: {}; question: {}", threshold, prompt);
     std::lock_guard<std::mutex> lock(mtx_);
+    std::string cleaned = clean_text(prompt);
+    std::vector<std::string> tokens;
+    std::istringstream iss(cleaned);
+    std::string word;
+    while (iss >> word) tokens.push_back(word);
+    std::set<std::string> candidate_tags;
+    for (const auto& w : tokens) candidate_tags.insert(w);
+    for (size_t i = 0; i + 1 < tokens.size(); ++i) candidate_tags.insert(tokens[i] + "_" + tokens[i+1]);
+    if (!candidate_tags.empty()) {
+        std::string tag_placeholders;
+        for (size_t i = 0; i < candidate_tags.size(); ++i) {
+            if (i > 0) tag_placeholders += ";";
+            tag_placeholders += "?";
+        }
+        std::string tag_query = "SELECT DISTINCT chunk_id FROM chunk_tags WHERE tag IN (" + tag_placeholders + ")";
+        sqlite3_stmt* tag_stmt;
+        sqlite3_prepare_v2(db, tag_query.c_str(), -1, &tag_stmt, nullptr);
+        int idx = 1;
+        for (const auto& t : candidate_tags) sqlite3_bind_text(tag_stmt, idx++, t.c_str(), -1, SQLITE_TRANSIENT);
+        std::vector<int> candidate_chunks;
+        while (sqlite3_step(tag_stmt) == SQLITE_ROW) candidate_chunks.push_back(sqlite3_column_int(tag_stmt, 0));
+        sqlite3_finalize(tag_stmt);
+        if (!candidate_chunks.empty()) {
+            int best_id = candidate_chunks[0];
+            sqlite3_stmt* stmt;
+            sqlite3_prepare_v2(db, "SELECT text FROM chunks WHERE id=?", -1, &stmt, nullptr);
+            sqlite3_bind_int(stmt, 1, best_id);
+            std::string result;
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                std::string txt(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
+                result = "{\"chunk_id\":" + std::to_string(best_id) + ",\"answer\":\"" + escape_json(txt) + "\"}";
+            } else {
+                result = R"({"chunk_id":-1,"answer":"Tag matched but chunk not found"})";
+            }
+            sqlite3_finalize(stmt);
+            return result;
+        }
+    }
     auto vec = vocab->vectorize(prompt);
     if ((int)vec.size() != net->input_size()) {
-        Logger::Error("Vocabulary size ({}) != network input size ({}). Reinitializing network.", vec.size(), net->input_size());
+        Logger::Error("DocumentStore::get_answer vocabulary size ({}) != network input size ({}). Reinitializing network.", vec.size(), net->input_size());
         net = std::make_unique<NeuralNetwork>(vec.size(), HIDDEN_SIZE, net->output_size());
         net->init_random();
         return R"({"answer":"Model mismatch. Please re‑upload documents.","chunk_id":-1})";
     }
     auto [idx, conf] = net->predict(vec);
-    Logger::Info("DocumentStore::get_answer prediction: chunk {}, confidence {:.4f}", idx, conf);
+    Logger::Trace("DocumentStore::get_answer prediction: chunk {}, confidence {:.4f}", idx, conf);
     if (conf < threshold) {
         std::ostringstream msg;
         msg << "I don't have enough confidence information yet. (confidence: " << conf << "). Please ask again later or lower the threshold.";
@@ -286,11 +348,12 @@ std::string DocumentStore::get_answer(const std::string& prompt, double threshol
     std::string result;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         std::string txt(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
-        result = "{\"answer\":\"" + escape_json(txt) + "\",\"chunk_id\":" + std::to_string(idx+1) + "}";
+        result = "{\"chunk_id\":" + std::to_string(idx+1) + ",\"answer\":\"" + escape_json(txt) + "\"}";
     } else {
-        result = R"({"answer":"No chunk found","chunk_id":-1})";
+        result = R"({"chunk_id":-1,"answer":"No chunk found"})";
     }
     sqlite3_finalize(stmt);
+    Logger::Trace("DocumentStore::get_answer {}", result.substr(0, 50));
     return result;
 }
 
@@ -315,46 +378,12 @@ std::vector<std::string> DocumentStore::split_into_chunks(const std::string& tex
 std::string DocumentStore::clean_text(const std::string& text) {
     std::string out;
     for (unsigned char c : text) {
-        if (std::isalnum(c) || c == '.' || c == ' ')
+        if (std::isalnum(c) || c == '.' || c == ' ' || c == '_')
             out += static_cast<char>(c);
         else
             out += ' ';
     }
     return out;
-}
-
-void DocumentStore::add_training_pair(const std::string& question, int chunk_id) {
-    sqlite3_stmt* stmt;
-    sqlite3_prepare_v2(db, "INSERT INTO training_pairs(question, chunk_id) VALUES(?,?)", -1, &stmt, nullptr);
-    sqlite3_bind_text(stmt, 1, question.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 2, chunk_id);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    train_on_pairs();
-}
-
-void DocumentStore::train_on_pairs() {
-    sqlite3_stmt* stmt;
-    sqlite3_prepare_v2(db, "SELECT question, chunk_id FROM training_pairs", -1, &stmt, nullptr);
-    std::vector<std::vector<double>> X;
-    std::vector<int> Y;
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        std::string q(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
-        int cid = sqlite3_column_int(stmt, 1);
-        X.push_back(vocab->vectorize(q));
-        Y.push_back(cid - 1);
-    }
-    sqlite3_finalize(stmt);
-    if (X.empty()) return;
-    int max_chunk = *std::max_element(Y.begin(), Y.end()) + 1;
-    if (max_chunk > net->output_size()) {
-        net->expand_outputs(max_chunk);
-    }
-    const int epochs = 20;
-    for (int e = 0; e < epochs; ++e) {
-        net->train_batch(X, Y, 0.01);
-    }
-    save_state();
 }
 
 void DocumentStore::serialize() {
@@ -396,3 +425,45 @@ size_t DocumentStore::get_memory_usage() const {
     return total;
 }
 
+void DocumentStore::add_tag(const std::string& tag, int chunk_id) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    std::string cleaned_tag = clean_text(tag);
+    vocab->add_words(cleaned_tag);
+    sqlite3_stmt* insert_tag = nullptr;
+    sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO chunk_tags(chunk_id, tag) VALUES(?,?)", -1, &insert_tag, nullptr);
+    sqlite3_bind_int(insert_tag, 1, chunk_id);
+    sqlite3_bind_text(insert_tag, 2, cleaned_tag.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(insert_tag);
+    sqlite3_finalize(insert_tag);
+    std::vector<std::vector<double>> X;
+    std::vector<int> Y;
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT id, text FROM chunks ORDER BY id", -1, &stmt, nullptr);
+    sqlite3_stmt* tag_stmt = nullptr;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int id = sqlite3_column_int(stmt, 0);
+        std::string raw_txt(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
+        std::string clean_txt = clean_text(raw_txt);
+        auto vec = vocab->vectorize(clean_txt);
+        sqlite3_prepare_v2(db, "SELECT tag FROM chunk_tags WHERE chunk_id=?", -1, &tag_stmt, nullptr);
+        sqlite3_bind_int(tag_stmt, 1, id);
+        while (sqlite3_step(tag_stmt) == SQLITE_ROW) {
+            std::string tag_str(reinterpret_cast<const char*>(sqlite3_column_text(tag_stmt, 0)));
+            auto tag_vec = vocab->vectorize(tag_str);
+            for (size_t i = 0; i < vec.size(); ++i) vec[i] += tag_vec[i];
+        }
+        sqlite3_finalize(tag_stmt);
+        X.push_back(vec);
+        Y.push_back(id - 1);
+    }
+    sqlite3_finalize(stmt);
+    int total_chunks = (int)X.size();
+    if (total_chunks > net->output_size()) {
+        net->expand_outputs(total_chunks);
+    }
+    const int epochs = 20;
+    for (int e = 0; e < epochs; ++e) {
+        net->train_batch(X, Y, 0.01);
+    }
+    save_state();
+}

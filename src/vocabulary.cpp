@@ -5,22 +5,38 @@ Vocabulary::Vocabulary() : doc_count(0) {}
 void Vocabulary::clear() { words.clear(); word2idx.clear(); df.clear(); doc_count = 0; chunk_tfs.clear(); }
 
 int Vocabulary::add_words(const std::string& text) {
+    std::vector<std::string> tokens;
     std::istringstream iss(text);
     std::string word;
-    int added = 0;
     while (iss >> word) {
         if (word.empty()) continue;
-        auto it = word2idx.find(word);
+        tokens.push_back(word);
+    }
+    int added = 0;
+    for (const auto& w : tokens) {
+        auto it = word2idx.find(w);
         if (it == word2idx.end()) {
-            if (static_cast<int>(words.size()) >= MAX_VOCAB) continue;
-            word2idx[word] = words.size();
-            words.push_back(word);
+            if ((int)words.size() >= MAX_VOCAB) continue;
+            word2idx[w] = words.size();
+            words.push_back(w);
+            df.push_back(0);
+            ++added;
+        }
+    }
+    for (size_t i = 0; i + 1 < tokens.size(); ++i) {
+        std::string bigram = tokens[i] + "_" + tokens[i+1];
+        auto it = word2idx.find(bigram);
+        if (it == word2idx.end()) {
+            if ((int)words.size() >= MAX_VOCAB) continue;
+            word2idx[bigram] = words.size();
+            words.push_back(bigram);
             df.push_back(0);
             ++added;
         }
     }
     return added;
 }
+
 
 int Vocabulary::size() const { return words.size(); }
 
@@ -33,14 +49,21 @@ double Vocabulary::idf(int word_idx) const {
 
 std::vector<double> Vocabulary::vectorize(const std::string& text) const {
     std::vector<double> vec(words.size(), 0.0);
-    std::unordered_map<int, int> tf;
+    std::vector<std::string> tokens;
     std::istringstream iss(text);
     std::string word;
-    while (iss >> word) {
-        auto it = word2idx.find(word);
+    while (iss >> word) tokens.push_back(word);
+    std::unordered_map<int, int> tf;
+    for (const auto& w : tokens) {
+        auto it = word2idx.find(w);
         if (it != word2idx.end()) tf[it->second]++;
     }
-    for (auto& p : tf) {
+    for (size_t i = 0; i + 1 < tokens.size(); ++i) {
+        std::string bigram = tokens[i] + "_" + tokens[i+1];
+        auto it = word2idx.find(bigram);
+        if (it != word2idx.end()) tf[it->second]++;
+    }
+    for (const auto& p : tf) {
         int idx = p.first;
         double idf_val = idf(idx);
         vec[idx] = static_cast<double>(p.second) * idf_val;
