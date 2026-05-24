@@ -25,18 +25,17 @@ function setControlsDisabled(disabled) {
 function updateMemoryDisplay(memBytes) {
     if (memBytes !== undefined) {
         const memMB = (memBytes / (1024 * 1024)).toFixed(2);
-        memoryDisplay.innerHTML = `🧠 Memory used: ${memMB} MB`;
+        memoryDisplay.innerHTML = `🔋 Memory used: ${memMB} MB`;
     }
 }
 
-function setStatusConsole(message, isError = true) {
+function setStatusConsole(message, isError = false) {
     if (statusConsoleDiv) {
         statusConsoleDiv.innerHTML = message;
+        statusConsoleDiv.classList.remove('error', 'success');
         if (isError) {
-            statusConsoleDiv.classList.remove('success');
             statusConsoleDiv.classList.add('error');
         } else {
-            statusConsoleDiv.classList.remove('error');
             statusConsoleDiv.classList.add('success');
         }
     }
@@ -116,6 +115,10 @@ function updateFileListDisplay() {
                         <span class="file-name">${escapeHtml(f.name)}</span>
                         <span class="file-status ${statusClass}">${statusText}</span>
                     </div>
+                    <div class="file-tags">
+                        <input type="text" class="tag-input" data-index="${i}"
+                        placeholder="Tags (semicolon separated)" value="${escapeHtml(f.tags || '')}">
+                    </div>
                     ${progressBarHtml}
                  </div>`;
     }
@@ -169,7 +172,10 @@ async function pollTrainingProgress(fileIndex) {
 async function uploadFile(file, fileIndex) {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('serialize', '0');
+    const doSerialize = serializeCheckbox.checked ? '1' : '0';
+    formData.append('serialize', doSerialize);
+    const tags = filesToProcess[fileIndex].tags || '';
+    formData.append('tags', tags);
 
     try {
         const response = await fetch('/', { method: 'POST', body: formData });
@@ -241,27 +247,13 @@ async function processAllFiles() {
     if (warnings.length > 0) {
         setStatusConsole(warnings.join('<br>'), true);
     } else {
-        setStatusConsole('✅ All files processed successfully.', false);
+        setStatusConsole('👌 All files processed successfully.');
     }
 
-    if (serializeCheckbox.checked && allSuccess) {
-        statusDiv.innerHTML = '💾 Serializing model to disk...';
-        try {
-            const res = await fetch('/serialize', { method: 'POST' });
-            const data = await res.json();
-            if (data.status === 'ok') {
-                statusDiv.innerHTML = '✔️ All documents learned and model serialized!';
-            } else {
-                throw new Error(data.message || 'Serialization failed');
-            }
-        } catch (err) {
-            statusDiv.innerHTML = `⚠️ Learning finished but serialization failed: ${err.message}`;
-            setStatusConsole(`Serialization error: ${err.message}`, true);
-        }
-    } else if (!allSuccess) {
+    if (!allSuccess) {
         statusDiv.innerHTML = '⚠️ Some files failed. See list for details.';
     } else {
-        statusDiv.innerHTML = '✔️ All documents learned (no serialization requested).';
+        statusDiv.innerHTML = '✔️ All documents learned.';
     }
 
     setControlsDisabled(false);
@@ -337,4 +329,13 @@ fileInput.addEventListener('change', () => {
     updateFileListDisplay();
     setControlsDisabled(false);
     fetchProgress();
+});
+
+fileListContainer.addEventListener('input', (evt) => {
+    if (evt.target.classList.contains('tag-input')) {
+        const idx = parseInt(evt.target.dataset.index, 10);
+        if (!isNaN(idx) && filesToProcess[idx]) {
+            filesToProcess[idx].tags = evt.target.value;
+        }
+    }
 });
