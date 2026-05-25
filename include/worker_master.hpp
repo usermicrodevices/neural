@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cstdlib>
 #include <memory>
+#include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -30,6 +32,9 @@ private:
     std::unique_ptr<WorkerAdmin> admin_worker_;
     std::unique_ptr<WorkerClient> client_worker_;
     std::atomic<bool> running_;
+    pid_t admin_pid_;
+    pid_t client_pid_;
+
     void createSocketpairs();
     void spawnWorkers();
 };

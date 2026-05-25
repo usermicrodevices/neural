@@ -16,7 +16,7 @@
 #include "logger.hpp"
 
 struct JobAdmin {
-    enum Type { LEARN, SERIALIZE } type;
+    enum Type { LEARN, SERIALIZE, SHUTDOWN } type;
     std::vector<uint8_t> data;
     std::promise<void> done;
 };
@@ -41,6 +41,7 @@ public:
     bool dequeue(JobAdmin& job);
     void set_last_file_result(int result);
     int get_and_clear_last_file_result();
+    std::future<void> enqueue_shutdown();
 
 private:
     asio::io_context& io_;

@@ -67,6 +67,16 @@ void HttpAdminSrv::do_accept() {
     });
 }
 
+std::future<void> HttpAdminSrv::enqueue_shutdown() {
+    std::promise<void> p; auto f = p.get_future();
+    JobAdmin job;
+    job.type = JobAdmin::SHUTDOWN;
+    job.done = std::move(p);
+    { std::lock_guard<std::mutex> lock(mtx_); jobs_.push(std::move(job)); }
+    cv_.notify_one();
+    return f;
+}
+
 void HttpAdminSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
     try {
         asio::error_code ec;
@@ -210,6 +220,50 @@ void HttpAdminSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
                     asio::write(*s, asio::buffer(build_response("application/json", resp)), ec);
                 }
             }).detach();
+            return;
+        }
+        else if (method == "GET" && path == "/train-group") {
+            std::string page = R"(
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="UTF-8"><title>Train Group Logic</title><style>body{font-family:sans-serif;max-width:800px;margin:2rem auto;padding:1rem;}</style></head>
+            <body>
+            <h1>🧠 Extended Train Logic</h1>
+            <p>Group training and UML attachment – coming soon.</p>
+            <p><a href="/">Back to Admin</a></p>
+            </body>
+            </html>
+            )";
+            std::string resp = build_response("text/html", page);
+            asio::write(*s, asio::buffer(resp), ec);
+            return;
+        }
+        else if (method == "GET" && path == "/config") {
+            std::string page = R"(
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="UTF-8"><title>Configuration</title><style>body{font-family:sans-serif;max-width:800px;margin:2rem auto;padding:1rem;}</style></head>
+            <body>
+            <h1>⚙️ Service Configuration</h1>
+            <p>Settings page – coming soon.</p>
+            <p><a href="/">Back to Admin</a></p>
+            </body>
+            </html>
+            )";
+            std::string resp = build_response("text/html", page);
+            asio::write(*s, asio::buffer(resp), ec);
+            return;
+        }
+        else if (method == "POST" && path == "/stop") {
+            auto future = enqueue_shutdown();
+            std::thread([future = std::move(future), s, this]() mutable {
+                try {
+                    future.get();
+                } catch (...) {}
+            }).detach();
+            std::string resp = R"({"status":"ok","message":"Service stopping..."})";
+            std::string http_resp = build_response("application/json", resp);
+            asio::write(*s, asio::buffer(http_resp), ec);
             return;
         }
         if (method == "GET") {
