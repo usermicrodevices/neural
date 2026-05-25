@@ -21,12 +21,14 @@ void WorkerMaster::spawnWorkers() {
     size_t mem_usage = store_->get_memory_usage();
     admin_worker_ = std::make_unique<WorkerAdmin>(admin_sv_[1], admin_sv_[0], client_sv_[0], mem_usage);
     client_worker_ = std::make_unique<WorkerClient>(client_sv_[1], admin_sv_[0], client_sv_[0]);
+    admin_pid_ = admin_worker_->getPid();
+    client_pid_ = client_worker_->getPid();
 }
 
 void WorkerMaster::run() {
     std::atomic<bool> running{true};
     std::thread admin_thread([this, &running]() {
-        while (running) {
+        while (running.load()) {
             try {
                 Message msg = admin_sock_->recv();
                 switch(msg.cmd){
@@ -60,13 +62,22 @@ void WorkerMaster::run() {
                     }
                 }
             } catch (const std::exception& err) {
-                Logger::Error("WorkerMaster::run admin thread error: {}", err.what());
-                running = false;
+                if (std::string(err.what()).find("read failed") != std::string::npos) {
+                    Logger::Info("Admin thread: child process terminated, shutting down.");
+                    kill(admin_pid_, SIGTERM);
+                    kill(client_pid_, SIGTERM);
+                    std::exit(0);
+                }
+                else {
+                    Logger::Error("WorkerMaster::run admin thread error: {}", err.what());
+                    running.store(false);
+                    break;
+                }
             }
         }
     });
     std::thread client_thread([this, &running]() {
-        while (running) {
+        while (running.load()) {
             try {
                 Message msg = client_sock_->recv();
                 if (msg.cmd == 0x04) {
@@ -89,7 +100,7 @@ void WorkerMaster::run() {
                 }
             } catch (const std::exception& err) {
                 Logger::Error("Client thread error: {}", err.what());
-                running = false;
+                running.store(false);
                 break;
             }
         }

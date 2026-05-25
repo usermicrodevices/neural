@@ -17,7 +17,7 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
                     if (job.data.size() >= 3) {
                         uint8_t serialize_flag = job.data[0];
                         uint16_t tag_len = ntohs(*(uint16_t*)&job.data[1]);
-                        if (job.data.size() < 3 + tag_len)
+                        if (job.data.size() < static_cast<size_t>(3 + tag_len))
                             throw std::runtime_error("Invalid LEARN payload: insufficient data");
                         std::string tags(job.data.begin()+3, job.data.begin()+3+tag_len);
                         std::string data(job.data.begin()+3+tag_len, job.data.end());
@@ -68,6 +68,11 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
                     job.done.set_exception(std::make_exception_ptr(err));
                 }
                 break;
+            }
+            case JobAdmin::SHUTDOWN: {
+                job.done.set_value();
+                server.stop();
+                return;
             }
         }
     }

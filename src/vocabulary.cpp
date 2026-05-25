@@ -13,7 +13,17 @@ int Vocabulary::add_words(const std::string& text) {
         tokens.push_back(word);
     }
     int added = 0;
+    auto is_valid = [](const std::string& w) -> bool {
+        if (w.length() < 2) return false;
+        bool has_letter = false;
+        for (unsigned char c : w) {
+            if (!std::isalnum(c) && c != '_') return false;
+            if (std::isalpha(c)) has_letter = true;
+        }
+        return has_letter;
+    };
     for (const auto& w : tokens) {
+        if (!is_valid(w)) continue;
         auto it = word2idx.find(w);
         if (it == word2idx.end()) {
             if ((int)words.size() >= MAX_VOCAB) continue;
@@ -25,6 +35,7 @@ int Vocabulary::add_words(const std::string& text) {
     }
     for (size_t i = 0; i + 1 < tokens.size(); ++i) {
         std::string bigram = tokens[i] + "_" + tokens[i+1];
+        if (!is_valid(bigram)) continue;
         auto it = word2idx.find(bigram);
         if (it == word2idx.end()) {
             if ((int)words.size() >= MAX_VOCAB) continue;
