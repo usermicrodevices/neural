@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>neural-admin-uml</title>
+<link rel="stylesheet" href="static/admin/admin.css">
+</head>
+<body>
+<div class="toolbar">
+    <button id="homeBtn" title="Home">🏠</button>
+    <button id="trainUmlBtn" title="UML Train Logic">🧠</button>
+    <button id="configBtn" title="Configuration">⚙️</button>
+    <button id="stopBtn" title="Stop Service">🛑</button>
+</div>
+<div class="card">
+    <h2>📦 Create a UML container with Source Files</h2>
+    <form id="umlForm" enctype="multipart/form-data">
+        <label for="uml_name">UML name:</label>
+        <input type="text" id="uml_name" name="uml_name" required style="width:100%; margin-bottom:1rem;">
+
+        <label>Source Files (each with a type):</label>
+        <div id="sourcesContainer"></div>
+        <button type="button" id="addSourceBtn" class="add-source-btn">➕ Add another source file</button>
+
+        <label for="uml_file">UML Diagram (UML text file, optional):</label>
+        <input type="file" id="uml_file" name="uml_file" accept=".uml,.txt,.puml">
+
+        <div class="flex-row" style="margin-top:1rem;">
+            <button type="submit">➕ Create UML container</button>
+            <div id="status" class="status"></div>
+        </div>
+    </form>
+    <div id="statusConsole" class="status-console"></div>
+</div>
+<script src="static/admin/admin_uml.js"></script>
+</body>
+</html>

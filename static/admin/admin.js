@@ -24,29 +24,19 @@ function loadHomeView() {
             <div id="statusConsole" class="status-console"></div>
         </div>
     `;
-    // Re-attach event listeners after DOM update
     attachHomeEventListeners();
 }
 
 function loadTrainView() {
-    mainContent.innerHTML = `
-        <div class="card">
-            <h1>🧠 Extended Train Logic</h1>
-            <p>Group training and UML attachment – coming soon.</p>
-        </div>
-    `;
+    //mainContent.innerHTML = `<div class="card"><h1>🧠 Extended Train Logic</h1><p>Group training and UML attachment – coming soon.</p></div>`;
+    window.location.href = '/train-uml';
 }
 
 function loadConfigView() {
-    mainContent.innerHTML = `
-        <div class="card">
-            <h1>⚙️ Service Configuration</h1>
-            <p>Settings page – coming soon.</p>
-        </div>
-    `;
+    //mainContent.innerHTML = `<div class="card"><h1>⚙️ Service Configuration</h1><p>Settings page – coming soon.</p></div>`;
+    window.location.href = '/config';
 }
 
-// Variables needed for home view functionality
 let pollInterval = null;
 let currentFileIndex = 0;
 let filesToProcess = [];
@@ -391,12 +381,11 @@ function attachHomeEventListeners() {
     fetchProgress();
 }
 
-// Toolbar event handlers
 document.getElementById('homeBtn').addEventListener('click', () => {
     loadHomeView();
 });
 
-document.getElementById('trainGroupBtn').addEventListener('click', () => {
+document.getElementById('trainUmlBtn').addEventListener('click', () => {
     loadTrainView();
 });
 
@@ -416,5 +405,4 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
     }
 });
 
-// Initial load
 loadHomeView();
