@@ -131,6 +131,49 @@ button:disabled { background: #94a3b8; cursor: not-allowed; }
     border-color: #3b82f6;
     box-shadow: 0 0 0 2px rgba(59,130,246,0.1);
 }
+.sources-list {
+    max-height: 250px;
+    overflow-y: auto;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    margin: 1rem 0;
+    background: white;
+}
+.source-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem;
+    border-bottom: 1px solid #eee;
+}
+.source-item:last-child { border-bottom: none; }
+.source-entry {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    padding: 0.5rem;
+    background: #f8fafc;
+    border-radius: 0.5rem;
+}
+.source-entry input[type="file"] {
+    flex: 2;
+}
+.source-entry select {
+    flex: 1;
+    padding: 0.25rem;
+}
+.add-source-btn {
+    background: #10b981;
+    margin-top: 0.5rem;
+}
+.remove-source-btn {
+    background: #ef4444;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+}
+
 .status { margin: 0.75rem 0; font-size: 0.9rem; }
 .status-console {
     margin: 0.75rem 0;

@@ -32,6 +32,15 @@ void WorkerMaster::run() {
             try {
                 Message msg = admin_sock_->recv();
                 switch(msg.cmd){
+                    case 0x0C: {
+                        Logger::Info("Master: received 0x0C, querying src_type table");
+                        nlohmann::json json_result = store_->get_source_types();
+                        std::string json_str = json_result.dump();
+                        Logger::Info("Master: query returned {} bytes", json_str.size());
+                        admin_sock_->send(Message{0x0D, {json_str.begin(), json_str.end()}});
+                        Logger::Info("Master: sent 0x0D response");
+                        break;
+                    }
                     case 0x01: {
                         if (msg.payload.size() < 1) continue;
                         bool serialize_flag = (msg.payload[0] != 0);
@@ -53,6 +62,39 @@ void WorkerMaster::run() {
                         std::memcpy(done_payload.data(), &mem_usage, sizeof(mem_usage));
                         done_payload[sizeof(mem_usage)] = static_cast<uint8_t>(res);
                         admin_sock_->send(Message{0x03, done_payload});
+                        break;
+                    }
+                    case 0x0A: {
+                        auto it = msg.payload.begin();
+                        // Skip two zero bytes (old sources_type)
+                        it++; it++;
+                        std::string name, uml_schema;
+                        while (it != msg.payload.end() && *it != 0) name.push_back(*it++);
+                        if (it != msg.payload.end()) ++it;
+                        while (it != msg.payload.end() && *it != 0) uml_schema.push_back(*it++);
+                        if (it != msg.payload.end()) ++it;
+                        // Read number of source pairs
+                        if (it + 2 > msg.payload.end()) break;
+                        uint16_t count;
+                        std::memcpy(&count, &*it, 2);
+                        count = ntohs(count);
+                        it += 2;
+                        std::vector<std::pair<uint8_t, std::string>> sources;
+                        for (uint16_t i = 0; i < count; ++i) {
+                            if (it == msg.payload.end()) break;
+                            uint8_t src_type = *it++;
+                            if (it + 4 > msg.payload.end()) break;
+                            uint32_t size;
+                            std::memcpy(&size, &*it, 4);
+                            size = ntohl(size);
+                            it += 4;
+                            if (it + size > msg.payload.end()) break;
+                            std::string content(it, it + size);
+                            it += size;
+                            sources.emplace_back(src_type, content);
+                        }
+                        store_->create_uml_container(name, uml_schema, sources);
+                        admin_sock_->send(Message{0x0B, {}});
                         break;
                     }
                     case 0x08: {
