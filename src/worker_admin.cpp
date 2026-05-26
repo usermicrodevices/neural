@@ -12,16 +12,29 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
         if (!server.dequeue(job))
             break;
         switch(job.type){
-            case JobAdmin::LEARN: {
+            case JobType::SRC_TYPES: {
+                sock.send(Message{0x0C, {}});
+                Message msg = sock.recv();
+                if (msg.cmd == 0x0D) {
+                    std::string json(msg.payload.begin(), msg.payload.end());
+                    job.response.set_value(json);
+                } else {
+                    job.response.set_exception(
+                        std::make_exception_ptr(
+                            std::runtime_error(
+                                "WorkerAdmin::runChild: unexpected response for src-types")));
+                }
+                break;
+            }
+            case JobType::LEARN: {
                 try {
                     if (job.data.size() >= 3) {
                         uint8_t serialize_flag = job.data[0];
                         uint16_t tag_len = ntohs(*(uint16_t*)&job.data[1]);
                         if (job.data.size() < static_cast<size_t>(3 + tag_len))
-                            throw std::runtime_error("Invalid LEARN payload: insufficient data");
+                            throw std::runtime_error("WorkerAdmin::runChild Invalid LEARN payload: insufficient data");
                         std::string tags(job.data.begin()+3, job.data.begin()+3+tag_len);
                         std::string data(job.data.begin()+3+tag_len, job.data.end());
-                        // Re‑pack for the master [flag][tags][data] with a delimiter
                         std::vector<uint8_t> master_payload;
                         master_payload.push_back(serialize_flag);
                         master_payload.insert(master_payload.end(), tags.begin(), tags.end());
@@ -43,34 +56,48 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
                                 server.set_memory_usage(memory_usage);
                                 server.set_last_file_result(static_cast<int>(result_byte));
                                 server.set_training_done();
-                                job.done.set_value();
+                                job.response.set_value("");
                                 break;
                             }
                         }
                     }
                 } catch (const std::exception& err) {
-                    job.done.set_exception(std::make_exception_ptr(err));
+                    job.response.set_exception(std::make_exception_ptr(err));
                 }
                 break;
             }
-            case JobAdmin::SERIALIZE: {
+            case JobType::TRAIN_UML: {
+                try {
+                    sock.send(Message{0x0A, job.data});
+                    Message ack = sock.recv();
+                    if (ack.cmd == 0x0B) {
+                        job.response.set_value("");
+                    } else {
+                        throw std::runtime_error("WorkerAdmin::runChild unexpected response for TRAIN_UML");
+                    }
+                } catch (const std::exception& err) {
+                    job.response.set_exception(std::make_exception_ptr(err));
+                }
+                break;
+            }
+            case JobType::SERIALIZE: {
                 try {
                     sock.send(Message{0x08, {}});
                     Message ack = sock.recv();
                     if (ack.cmd == 0x09) {
-                        job.done.set_value();
+                        job.response.set_value("");
                     } else {
                         Logger::Error("WorkerAdmin::runChild unexpected response {:02X}", static_cast<unsigned>(ack.cmd));
-                        throw std::runtime_error("unexpected response");
+                        throw std::runtime_error("WorkerAdmin::runChild unexpected response");
                     }
                 } catch (const std::exception& err) {
                     Logger::Error("WorkerAdmin::runChild serialize error: {}", err.what());
-                    job.done.set_exception(std::make_exception_ptr(err));
+                    job.response.set_exception(std::make_exception_ptr(err));
                 }
                 break;
             }
-            case JobAdmin::SHUTDOWN: {
-                job.done.set_value();
+            case JobType::SHUTDOWN: {
+                job.response.set_value("");
                 server.stop();
                 return;
             }

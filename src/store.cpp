@@ -19,16 +19,27 @@ UploadResult DocumentStore::get_last_upload_result() const { return last_upload_
 
 void DocumentStore::initialize_db() {
     const char* sql =
-    "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY, text TEXT);"
-    "CREATE TABLE IF NOT EXISTS vocab (word TEXT PRIMARY KEY, idx INTEGER, df INTEGER);"
+    "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY, text TEXT UNIQUE) WITHOUT ROWID;"
+    //"CREATE UNIQUE INDEX IF NOT EXISTS chunks_unique ON chunks(text);"
+    "CREATE TABLE IF NOT EXISTS vocab (word TEXT PRIMARY KEY, idx INTEGER, df INTEGER) WITHOUT ROWID;"
     "CREATE TABLE IF NOT EXISTS model (layer INTEGER, weights BLOB, biases BLOB);"
-    "CREATE TABLE IF NOT EXISTS chunk_tags (chunk_id INTEGER, tag TEXT, PRIMARY KEY (chunk_id, tag));";
+    "CREATE TABLE IF NOT EXISTS chunk_tags (chunk_id INTEGER, tag TEXT, PRIMARY KEY (chunk_id, tag)) WITHOUT ROWID;"
+    "CREATE TABLE IF NOT EXISTS src_type (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE);"//AUTOINCREMENT based on ROWID
+    "CREATE TABLE IF NOT EXISTS uml (id INTEGER PRIMARY KEY, name TEXT, schema BLOB, UNIQUE(name, schema)) WITHOUT ROWID;"
+    //"CREATE UNIQUE INDEX IF NOT EXISTS uml_unique ON uml(name, schema);"
+    "CREATE TABLE IF NOT EXISTS uml_src (id INTEGER PRIMARY KEY AUTOINCREMENT, uml_id INTEGER, src_type_id INTEGER, source BLOB, UNIQUE(uml_id, src_type_id, source));";
+    //"CREATE UNIQUE INDEX IF NOT EXISTS uml_src_unique ON uml_src(uml_id, src_type_id, source);"
+    //"INSERT INTO src_type (name) SELECT 'C++' UNION ALL SELECT 'Python' WHERE NOT EXISTS (SELECT 1 FROM src_type);";
     char* errmsg = nullptr;
     if (sqlite3_exec(db, sql, nullptr, nullptr, &errmsg) != SQLITE_OK) {
         std::string error = errmsg;
         sqlite3_free(errmsg);
         throw std::runtime_error("Failed to create tables: " + error);
     }
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO src_type(name) VALUES('C++'),('Python')", -1, &stmt, nullptr);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
 }
 
 void DocumentStore::load_from_persistent() {
@@ -456,4 +467,51 @@ size_t DocumentStore::get_memory_usage() const {
     total += net->GetW2().capacity() * sizeof(double);
     total += net->GetB2().capacity() * sizeof(double);
     return total;
+}
+
+nlohmann::json DocumentStore::get_source_types() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    Logger::Trace("get_source_types: preparing query");
+    nlohmann::json result = nlohmann::json::array();
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT id, name FROM src_type ORDER BY id", -1, &stmt, nullptr) != SQLITE_OK) {
+        Logger::Error("DocumentStore::get_source_types: prepare failed: {}", sqlite3_errmsg(db));
+        return result;
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        nlohmann::json entry;
+        entry["id"] = sqlite3_column_int(stmt, 0);
+        entry["name"] = std::string(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
+        result.push_back(entry);
+        //Logger::Trace("get_source_types: added id={}, name={}", entry["id"], entry["name"]);
+    }
+    sqlite3_finalize(stmt);
+    //Logger::Trace("get_source_types: returning {} entries", result.size());
+    return result;
+}
+
+void DocumentStore::create_uml_container(const std::string& name,
+                                          const std::string& uml_schema,
+                                          const std::vector<std::pair<uint8_t, std::string>>& sources) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "INSERT INTO uml(name, schema) VALUES(?,?)", -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_blob(stmt, 2, uml_schema.c_str(), uml_schema.size(), SQLITE_TRANSIENT);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        Logger::Error("DocumentStore::create_uml_container: insert into uml failed: {}", sqlite3_errmsg(db));
+    }
+    sqlite3_finalize(stmt);
+    int uml_id = sqlite3_last_insert_rowid(db);
+    sqlite3_prepare_v2(db, "INSERT INTO uml_src(uml_id, src_type_id, source) VALUES(?,?,?)", -1, &stmt, nullptr);
+    for (auto& p : sources) {
+        sqlite3_bind_int(stmt, 1, uml_id);
+        sqlite3_bind_int(stmt, 2, p.first);
+        sqlite3_bind_blob(stmt, 3, p.second.c_str(), p.second.size(), SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            Logger::Error("DocumentStore::create_uml_container: insert into uml_src failed: {}", sqlite3_errmsg(db));
+        }
+        sqlite3_reset(stmt);
+    }
+    sqlite3_finalize(stmt);
 }
