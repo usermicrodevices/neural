@@ -246,10 +246,10 @@ function attachHomeEventListeners() {
     async function processAllFiles() {
         if (filesToProcess.length === 0) return;
 
-        setControlsDisabled(true);
         progressContainer.style.display = 'block';
         statusDiv.innerHTML = 'Starting learning...';
         updateGlobalProgressBar(0, 0);
+        setControlsDisabled(true);
 
         let allSuccess = true;
         for (let i = 0; i < filesToProcess.length; i++) {
@@ -316,13 +316,11 @@ function attachHomeEventListeners() {
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const files = Array.from(fileInput.files);
-        if (files.length === 0) {
+        if (filesToProcess.length === 0) {
             statusDiv.innerHTML = '⚠️ Please select at least one file.';
             return;
         }
-        filesToProcess = files;
-        fileStatuses = files.map(() => ({ status: 'pending', error: '', progress: 0 }));
+        fileStatuses = filesToProcess.map(() => ({ status: 'pending', error: '', progress: 0 }));
         currentFileIndex = 0;
         updateFileListDisplay();
         await processAllFiles();
@@ -361,7 +359,14 @@ function attachHomeEventListeners() {
         statusDiv.innerHTML = '';
         clearStatusConsole();
         const files = Array.from(fileInput.files);
-        filesToProcess = files;
+        filesToProcess = files.map(file => {
+            let name = file.name;
+            let lastDot = name.lastIndexOf('.');
+            let baseName = lastDot !== -1 ? name.substring(0, lastDot) : name;
+            baseName = baseName.replace(/\./g, '_');
+            file.tags = baseName;
+            return file;
+        });
         fileStatuses = files.map(() => ({ status: 'pending', error: '', progress: 0 }));
         currentFileIndex = 0;
         updateFileListDisplay();

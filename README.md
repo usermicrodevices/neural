@@ -5,6 +5,7 @@ simple C++ neural network service
 now it can run as master process with all neural network functional and two child processes admin for training, client for question-answer functional.
 all gui in html over http in browser. admin localhost:8080, client localhost:8081.
 
+![image](./neural_gui.gif "neural-gui")\
 ![image](./admin.png "admin")\
 ![image](./client.png "client")
 

@@ -332,7 +332,7 @@ void DocumentStore::add_document(const std::string& text, const std::string& tag
 }
 
 std::string DocumentStore::get_answer(const std::string& prompt, double threshold) {
-    Logger::Trace("DocumentStore::get_answer confidence threshold: {}; question: {}", threshold, prompt);
+    //Logger::Trace("DocumentStore::get_answer confidence threshold: {}; question: {}", threshold, prompt);
     std::lock_guard<std::mutex> lock(mtx_);
     std::string cleaned = clean_text(prompt);
     std::vector<std::string> tokens;
@@ -345,31 +345,39 @@ std::string DocumentStore::get_answer(const std::string& prompt, double threshol
     if (!candidate_tags.empty()) {
         std::string tag_placeholders;
         for (size_t i = 0; i < candidate_tags.size(); ++i) {
-            if (i > 0) tag_placeholders += ";";
+            if (i > 0) tag_placeholders += ",";
             tag_placeholders += "?";
         }
         std::string tag_query = "SELECT DISTINCT chunk_id FROM chunk_tags WHERE tag IN (" + tag_placeholders + ")";
-        sqlite3_stmt* tag_stmt;
-        sqlite3_prepare_v2(db, tag_query.c_str(), -1, &tag_stmt, nullptr);
-        int idx = 1;
-        for (const auto& t : candidate_tags) sqlite3_bind_text(tag_stmt, idx++, t.c_str(), -1, SQLITE_TRANSIENT);
-        std::vector<int> candidate_chunks;
-        while (sqlite3_step(tag_stmt) == SQLITE_ROW) candidate_chunks.push_back(sqlite3_column_int(tag_stmt, 0));
-        sqlite3_finalize(tag_stmt);
-        if (!candidate_chunks.empty()) {
-            int best_id = candidate_chunks[0];
-            sqlite3_stmt* stmt;
-            sqlite3_prepare_v2(db, "SELECT text FROM chunks WHERE id=?", -1, &stmt, nullptr);
-            sqlite3_bind_int(stmt, 1, best_id);
-            std::string result;
-            if (sqlite3_step(stmt) == SQLITE_ROW) {
-                std::string txt(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
-                result = "{\"chunk_id\":" + std::to_string(best_id) + ",\"answer\":\"" + escape_json(txt) + "\"}";
-            } else {
-                result = R"({"chunk_id":-1,"answer":"Tag matched but chunk not found"})";
+        //Logger::Trace("DocumentStore::get_answer tag_query: {}", tag_query);
+        sqlite3_stmt* tag_stmt = nullptr;
+        if (sqlite3_prepare_v2(db, tag_query.c_str(), -1, &tag_stmt, nullptr) != SQLITE_OK) {
+            Logger::Error("Tag query prepare failed: {}", sqlite3_errmsg(db));
+        } else {
+            int idx = 1;
+            for (const auto& t : candidate_tags) {
+                sqlite3_bind_text(tag_stmt, idx++, t.c_str(), -1, SQLITE_TRANSIENT);
             }
-            sqlite3_finalize(stmt);
-            return result;
+            std::vector<int> candidate_chunks;
+            while (sqlite3_step(tag_stmt) == SQLITE_ROW) {
+                candidate_chunks.push_back(sqlite3_column_int(tag_stmt, 0));
+            }
+            sqlite3_finalize(tag_stmt);
+            if (!candidate_chunks.empty()) {
+                int best_id = candidate_chunks[0];
+                sqlite3_stmt* stmt;
+                sqlite3_prepare_v2(db, "SELECT text FROM chunks WHERE id=?", -1, &stmt, nullptr);
+                sqlite3_bind_int(stmt, 1, best_id);
+                std::string result;
+                if (sqlite3_step(stmt) == SQLITE_ROW) {
+                    std::string txt(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
+                    result = "{\"chunk_id\":" + std::to_string(best_id) + ",\"answer\":\"" + escape_json(txt) + "\"}";
+                } else {
+                    result = R"({"chunk_id":-1,"answer":"Tag matched but chunk not found"})";
+                }
+                sqlite3_finalize(stmt);
+                return result;
+            }
         }
     }
     auto vec = vocab->vectorize(prompt);
@@ -380,7 +388,7 @@ std::string DocumentStore::get_answer(const std::string& prompt, double threshol
         return R"({"answer":"Model mismatch. Please re‑upload documents.","chunk_id":-1})";
     }
     auto [idx, conf] = net->predict(vec);
-    Logger::Trace("DocumentStore::get_answer prediction: chunk {}, confidence {:.4f}", idx, conf);
+    //Logger::Trace("DocumentStore::get_answer prediction: chunk {}, confidence {:.4f}", idx, conf);
     if (conf < threshold) {
         std::ostringstream msg;
         msg << "I don't have enough confidence information yet. (confidence: " << conf << "). Please ask again later or lower the threshold.";
@@ -397,7 +405,7 @@ std::string DocumentStore::get_answer(const std::string& prompt, double threshol
         result = R"({"chunk_id":-1,"answer":"No chunk found"})";
     }
     sqlite3_finalize(stmt);
-    Logger::Trace("DocumentStore::get_answer {}", result.substr(0, 50));
+    Logger::Trace("DocumentStore::get_answer {}", result.substr(0, 150));
     return result;
 }
 
@@ -433,28 +441,25 @@ std::string DocumentStore::clean_text(const std::string& text) {
 void DocumentStore::serialize() {
     sqlite3* file_db = nullptr;
     int err_code = sqlite3_open(persistent_path.c_str(), &file_db);
-    if (err_code == SQLITE_OK)
-        Logger::Info("👌DocumentStore::serialize success sqlite3_open file {}", persistent_path);
-    else {
+    if (err_code != SQLITE_OK){
         Logger::Error("🚫DocumentStore::serialize: failed to open persistent DB for writing; error code {}", err_code);
         return;
     }
+    //else Logger::Trace("👌DocumentStore::serialize success sqlite3_open file {}", persistent_path);
     sqlite3_backup* backup = sqlite3_backup_init(file_db, "main", db, "main");
     if (backup) {
         sqlite3_backup_step(backup, -1);
         err_code = sqlite3_backup_finish(backup);
-        if (err_code == SQLITE_OK)
-            Logger::Info("👌DocumentStore::serialize in‑memory DB to {}", persistent_path);
-        else
+        if (err_code != SQLITE_OK)
             Logger::Error("🚫DocumentStore::serialize: failed sqlite3_backup_finish file {}; error code {}", persistent_path, err_code);
+        //else Logger::Trace("👌DocumentStore::serialize in‑memory DB to {}", persistent_path);
     }
     else
         Logger::Error("🚫DocumentStore::serialize sqlite3_backup_init");
     err_code = sqlite3_close(file_db);
-    if (err_code == SQLITE_OK)
-        Logger::Info("👌DocumentStore::serialize success sqlite3_close file {}", persistent_path);
-    else
+    if (err_code != SQLITE_OK)
         Logger::Error("🚫DocumentStore::serialize: failed sqlite3_close file {}; error code {}", persistent_path, err_code);
+    //else Logger::Trace("👌DocumentStore::serialize success sqlite3_close file {}", persistent_path);
 }
 
 size_t DocumentStore::get_memory_usage() const {
