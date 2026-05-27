@@ -316,13 +316,11 @@ function attachHomeEventListeners() {
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const files = Array.from(fileInput.files);
-        if (files.length === 0) {
+        if (filesToProcess.length === 0) {
             statusDiv.innerHTML = '⚠️ Please select at least one file.';
             return;
         }
-        filesToProcess = files;
-        fileStatuses = files.map(() => ({ status: 'pending', error: '', progress: 0 }));
+        fileStatuses = filesToProcess.map(() => ({ status: 'pending', error: '', progress: 0 }));
         currentFileIndex = 0;
         updateFileListDisplay();
         await processAllFiles();
@@ -366,7 +364,8 @@ function attachHomeEventListeners() {
             let lastDot = name.lastIndexOf('.');
             let baseName = lastDot !== -1 ? name.substring(0, lastDot) : name;
             baseName = baseName.replace(/\./g, '_');
-            return { name: file.name, tags: baseName };
+            file.tags = baseName;
+            return file;
         });
         fileStatuses = files.map(() => ({ status: 'pending', error: '', progress: 0 }));
         currentFileIndex = 0;
