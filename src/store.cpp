@@ -332,7 +332,7 @@ void DocumentStore::add_document(const std::string& text, const std::string& tag
 }
 
 std::string DocumentStore::get_answer(const std::string& prompt, double threshold) {
-    Logger::Trace("DocumentStore::get_answer confidence threshold: {}; question: {}", threshold, prompt);
+    //Logger::Trace("DocumentStore::get_answer confidence threshold: {}; question: {}", threshold, prompt);
     std::lock_guard<std::mutex> lock(mtx_);
     std::string cleaned = clean_text(prompt);
     std::vector<std::string> tokens;
@@ -349,7 +349,7 @@ std::string DocumentStore::get_answer(const std::string& prompt, double threshol
             tag_placeholders += "?";
         }
         std::string tag_query = "SELECT DISTINCT chunk_id FROM chunk_tags WHERE tag IN (" + tag_placeholders + ")";
-        Logger::Trace("DocumentStore::get_answer tag_query: {}", tag_query);
+        //Logger::Trace("DocumentStore::get_answer tag_query: {}", tag_query);
         sqlite3_stmt* tag_stmt = nullptr;
         if (sqlite3_prepare_v2(db, tag_query.c_str(), -1, &tag_stmt, nullptr) != SQLITE_OK) {
             Logger::Error("Tag query prepare failed: {}", sqlite3_errmsg(db));
@@ -388,7 +388,7 @@ std::string DocumentStore::get_answer(const std::string& prompt, double threshol
         return R"({"answer":"Model mismatch. Please re‑upload documents.","chunk_id":-1})";
     }
     auto [idx, conf] = net->predict(vec);
-    Logger::Trace("DocumentStore::get_answer prediction: chunk {}, confidence {:.4f}", idx, conf);
+    //Logger::Trace("DocumentStore::get_answer prediction: chunk {}, confidence {:.4f}", idx, conf);
     if (conf < threshold) {
         std::ostringstream msg;
         msg << "I don't have enough confidence information yet. (confidence: " << conf << "). Please ask again later or lower the threshold.";
