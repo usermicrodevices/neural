@@ -447,7 +447,7 @@ void HttpAdminSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
         std::string method, path, version, content_type;
         int content_length = -1;
         parse_request(headers, method, path, version, content_type, content_length);
-        Logger::Trace("HttpAdminSrv::handle_request : {}; {}", method, path);
+        //Logger::Trace("HttpAdminSrv::handle_request : {}; {}", method, path);
         if (method == "GET" && path == "/favicon.ico") {
             get_favicon(s);
             return;
@@ -530,7 +530,6 @@ void HttpAdminSrv::set_training_done() {
 
 void HttpAdminSrv::set_memory_usage(size_t value) {
     std::lock_guard<std::mutex> lock(mem_mtx_);
-    Logger::Info("HttpAdminSrv::set_memory_usage: {}", value);
     memory_usage_ = value;
 }
 size_t HttpAdminSrv::memory_usage() const {

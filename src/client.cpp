@@ -73,7 +73,7 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
         std::string method, path, version, content_type;
         int content_length = 0;
         parse_request(headers, method, path, version, content_type, content_length);
-        Logger::Trace("HttpClientSrv::handle_request: {}; {};", method, path);
+        //Logger::Trace("HttpClientSrv::handle_request: {}; {};", method, path);
         if (method == "GET" && path == "/favicon.ico") {
             std::string svg = read_file_into_string("static/client/favicon.svg");
             std::string resp = build_response("image/svg+xml", svg);

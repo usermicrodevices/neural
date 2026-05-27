@@ -4,7 +4,7 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
     IpcSocket sock(child_fd);
     asio::io_context io;
     HttpAdminSrv server(io, 8080);
-    Logger::Info("WorkerAdmin::runChild: neural memory usage = {}", memory_usage);
+    //Logger::Info("WorkerAdmin::runChild: neural memory usage = {}", memory_usage);
     server.set_memory_usage(memory_usage);
     server.start();
     while (true) {
