@@ -1,4 +1,4 @@
-#include "html.hpp"
+#include "http.hpp"
 #include "client.hpp"
 
 static std::string generate_chat_id() {
@@ -228,7 +228,7 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
             std::string json_body(body.begin(), body.end());
             Logger::Trace("HttpClientSrv::handle_request JSON: {}", json_body);
             try {
-                auto req = json::parse(json_body);
+                auto req = nlohmann::json::parse(json_body);
                 std::string user_prompt;
                 if (req.contains("messages")) {
                     for (const auto& msg : req["messages"]) {
@@ -261,9 +261,9 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
                 }
                 auto future = enqueue_ask(user_prompt, threshold);
                 std::string answer_json = future.get();
-                auto ans = json::parse(answer_json);
+                auto ans = nlohmann::json::parse(answer_json);
                 std::string answer_text = ans.value("answer", "No answer");
-                json response;
+                nlohmann::json response;
                 response["id"] = generate_chat_id();
                 response["object"] = "chat.completion";
                 response["created"] = std::chrono::system_clock::now().time_since_epoch().count();
@@ -279,9 +279,9 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
                 std::string resp_body = response.dump();
                 std::string http_resp = build_response("application/json", resp_body);
                 asio::write(*s, asio::buffer(http_resp), ec);
-            } catch (const std::exception& e) {
-                json error;
-                error["error"] = {{"message", e.what()}, {"type", "invalid_request_error"}, {"code", 400}};
+            } catch (const std::exception& err) {
+                nlohmann::json error;
+                error["error"] = {{"message", err.what()}, {"type", "invalid_request_error"}, {"code", 400}};
                 std::string resp = build_response("application/json", error.dump());
                 asio::write(*s, asio::buffer(resp), ec);
             }

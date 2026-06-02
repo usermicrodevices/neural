@@ -18,7 +18,6 @@
 
 #include "logger.hpp"
 
-using json = nlohmann::json;
 struct JobPrompt {
     std::string prompt;
     double threshold;
