@@ -32,16 +32,16 @@ void WorkerMaster::run() {
             try {
                 Message msg = admin_sock_->recv();
                 switch(msg.cmd){
-                    case 0x0C: {
-                        Logger::Info("Master: received 0x0C, querying src_type table");
+                    case JobTypeAdmin::SRC_TYPES: {
+                        Logger::Info("Master: received {:02X}, querying src_type table", static_cast<unsigned>(JobTypeAdmin::SRC_TYPES));
                         nlohmann::json json_result = store_->get_source_types();
                         std::string json_str = json_result.dump();
                         Logger::Info("Master: query returned {} bytes", json_str.size());
-                        admin_sock_->send(Message{0x0D, {json_str.begin(), json_str.end()}});
-                        Logger::Info("Master: sent 0x0D response");
+                        admin_sock_->send(Message{JobTypeAdmin::SRC_TYPES, {json_str.begin(), json_str.end()}});
+                        Logger::Info("Master: sent {:02X} response", static_cast<unsigned>(JobTypeAdmin::SRC_TYPES));
                         break;
                     }
-                    case 0x01: {
+                    case JobTypeAdmin::TRAIN: {
                         if (msg.payload.size() < 1) continue;
                         bool serialize_flag = (msg.payload[0] != 0);
                         auto delim_it = std::find(msg.payload.begin() + 1, msg.payload.end(), 0);
@@ -53,7 +53,7 @@ void WorkerMaster::run() {
                         std::string tags(msg.payload.begin() + 1, msg.payload.begin() + delim);
                         std::string data(msg.payload.begin() + delim + 1, msg.payload.end());
                         auto progress_cb = [this](int pct) {
-                            admin_sock_->send(Message{0x02, {static_cast<uint8_t>(pct)}});
+                            admin_sock_->send(Message{TRAIN_PROGRESS, {static_cast<uint8_t>(pct)}});
                         };
                         store_->add_document(data, tags, progress_cb, serialize_flag);
                         size_t mem_usage = store_->get_memory_usage();
@@ -61,19 +61,17 @@ void WorkerMaster::run() {
                         std::vector<uint8_t> done_payload(sizeof(mem_usage) + 1);
                         std::memcpy(done_payload.data(), &mem_usage, sizeof(mem_usage));
                         done_payload[sizeof(mem_usage)] = static_cast<uint8_t>(res);
-                        admin_sock_->send(Message{0x03, done_payload});
+                        admin_sock_->send(Message{JobTypeAdmin::TRAIN_DONE, done_payload});
                         break;
                     }
-                    case 0x0A: {
+                    case JobTypeAdmin::TRAIN_UML: {
                         auto it = msg.payload.begin();
-                        // Skip two zero bytes (old sources_type)
                         it++; it++;
                         std::string name, uml_schema;
                         while (it != msg.payload.end() && *it != 0) name.push_back(*it++);
                         if (it != msg.payload.end()) ++it;
                         while (it != msg.payload.end() && *it != 0) uml_schema.push_back(*it++);
                         if (it != msg.payload.end()) ++it;
-                        // Read number of source pairs
                         if (it + 2 > msg.payload.end()) break;
                         uint16_t count;
                         std::memcpy(&count, &*it, 2);
@@ -94,12 +92,46 @@ void WorkerMaster::run() {
                             sources.emplace_back(src_type, content);
                         }
                         store_->create_uml_container(name, uml_schema, sources);
-                        admin_sock_->send(Message{0x0B, {}});
+                        admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {}});
                         break;
                     }
-                    case 0x08: {
+                    case JobTypeAdmin::GET_TABLE: {
+                        auto it = msg.payload.begin();
+                        std::string table, filter;
+                        while (it != msg.payload.end() && *it != 0) table.push_back(*it++);
+                        if (it != msg.payload.end()) ++it;
+                        while (it != msg.payload.end() && *it != 0) filter.push_back(*it++);
+                        if (it != msg.payload.end()) ++it;
+                        int offset = 0, limit = 100;
+                        if (it + 8 <= msg.payload.end()) {
+                            uint32_t net_offset, net_limit;
+                            std::memcpy(&net_offset, &*it, 4);
+                            std::memcpy(&net_limit, &*it + 4, 4);
+                            offset = ntohl(net_offset);
+                            limit = ntohl(net_limit);
+                        }
+                        try {
+                            Logger::Trace("WorkerMaster::run: get_table_data {}", table);
+                            nlohmann::json result = store_->get_table_data(table, filter, offset, limit);
+                            std::string json_str = result.dump();
+                            Logger::Trace("WorkerMaster::run: send response for table  {}", table);
+                            admin_sock_->send(Message{JobTypeAdmin::GET_TABLE, {json_str.begin(), json_str.end()}});
+                        } catch (const std::exception& err) {
+                            nlohmann::json errjson = {{"error", err.what()}};
+                            std::string err_str = errjson.dump();
+                            admin_sock_->send(Message{JobTypeAdmin::GET_TABLE, {err_str.begin(), err_str.end()}});
+                        }
+                        break;
+                    }
+                    case JobTypeAdmin::LIST_TABLES: {
+                        nlohmann::json result = store_->list_tables();
+                        std::string json_str = result.dump();
+                        admin_sock_->send(Message{JobTypeAdmin::LIST_TABLES, {json_str.begin(), json_str.end()}});
+                        break;
+                    }
+                    case JobTypeAdmin::SERIALIZE: {
                         store_->serialize();
-                        admin_sock_->send(Message{0x09, {}});
+                        admin_sock_->send(Message{JobTypeAdmin::SERIALIZE, {}});
                         break;
                     }
                 }

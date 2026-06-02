@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Database Browser</title>
+<link rel="stylesheet" href="static/admin/admin.css">
+<style>
+    .db-container { display: flex; gap: 2rem; flex-wrap: wrap; }
+    .table-list { flex: 1; min-width: 250px; background: white; border-radius: 1rem; padding: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .table-content { flex: 3; min-width: 500px; background: white; border-radius: 1rem; padding: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow-x: auto; }
+    .table-list ul { list-style: none; padding: 0; margin: 0; }
+    .table-list li { padding: 0.5rem; cursor: pointer; border-bottom: 1px solid #e2e8f0; }
+    .table-list li:hover { background: #f1f5f9; }
+    .table-list li.active { background: #3b82f6; color: white; }
+    .search-table { width: 100%; padding: 0.5rem; margin-bottom: 1rem; border: 1px solid #cbd5e1; border-radius: 0.5rem; }
+    .search-row { margin-bottom: 1rem; display: flex; gap: 0.5rem; }
+    .search-row input { flex: 1; padding: 0.5rem; border: 1px solid #cbd5e1; border-radius: 0.5rem; }
+    .search-row button { background: #3b82f6; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.5rem; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #e2e8f0; padding: 0.5rem; text-align: left; }
+    th { background: #f8fafc; }
+    .error { color: #ef4444; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+    <button id="btnTrain" title="Home">🏠</button>
+    <button id="btnTrainUml" title="UML Train Logic">🧠</button>
+    <button id="btnDbShow" title="Show Database">📊</button>
+    <button id="btnConfig" title="Configuration">⚙️</button>
+    <button id="btnStop" title="Stop Service">🛑</button>
+</div>
+<div class="card">
+    <h2>📊 Database Browser</h2>
+    <div class="db-container">
+        <div class="table-list">
+            <input type="text" id="tableSearch" class="search-table" placeholder="🔍 Search table name...">
+            <ul id="tablesList"></ul>
+        </div>
+        <div class="table-content">
+            <div id="contentArea">
+                <p>Select a table from the left to view its contents.</p>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="static/admin/admin_show_db.js"></script>
+</body>
+</html>

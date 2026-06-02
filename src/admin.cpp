@@ -1,4 +1,4 @@
-#include "html.hpp"
+#include "http.hpp"
 #include "admin.hpp"
 
 HttpAdminSrv::HttpAdminSrv(asio::io_context& io, unsigned short port)
@@ -41,7 +41,7 @@ std::future<std::string> HttpAdminSrv::enqueue_learn(const std::vector<uint8_t>&
     std::promise<std::string> p;
     auto f = p.get_future();
     JobAdmin job;
-    job.type = JobType::LEARN;
+    job.type = JobTypeAdmin::TRAIN;
     job.data = data;
     job.response = std::move(p);
     { std::lock_guard<std::mutex> lock(mtx_); jobs_.push(std::move(job)); }
@@ -53,7 +53,7 @@ std::future<std::string> HttpAdminSrv::enqueue_src_types() {
     std::promise<std::string> p;
     auto f = p.get_future();
     JobAdmin job;
-    job.type = JobType::SRC_TYPES;
+    job.type = JobTypeAdmin::SRC_TYPES;
     job.response = std::move(p);
     { std::lock_guard<std::mutex> lock(mtx_); jobs_.push(std::move(job)); }
     cv_.notify_one();
@@ -73,8 +73,40 @@ std::future<std::string> HttpAdminSrv::enqueue_train_uml(const std::vector<uint8
     std::promise<std::string> p;
     auto f = p.get_future();
     JobAdmin job;
-    job.type = JobType::TRAIN_UML;
+    job.type = JobTypeAdmin::TRAIN_UML;
     job.data = payload;
+    job.response = std::move(p);
+    { std::lock_guard<std::mutex> lock(mtx_); jobs_.push(std::move(job)); }
+    cv_.notify_one();
+    return f;
+}
+
+std::future<std::string> HttpAdminSrv::enqueue_list_tables() {
+    std::promise<std::string> p;
+    auto f = p.get_future();
+    JobAdmin job;
+    job.type = JobTypeAdmin::LIST_TABLES;
+    job.response = std::move(p);
+    { std::lock_guard<std::mutex> lock(mtx_); jobs_.push(std::move(job)); }
+    cv_.notify_one();
+    return f;
+}
+
+std::future<std::string> HttpAdminSrv::enqueue_get_table(const std::string& table, const std::string& filter, int offset, int limit) {
+    std::promise<std::string> p;
+    auto f = p.get_future();
+    JobAdmin job;
+    job.type = JobTypeAdmin::GET_TABLE;
+    std::vector<uint8_t> data;
+    data.insert(data.end(), table.begin(), table.end());
+    data.push_back(0);
+    data.insert(data.end(), filter.begin(), filter.end());
+    data.push_back(0);
+    uint32_t net_offset = htonl(offset);
+    uint32_t net_limit = htonl(limit);
+    data.insert(data.end(), (uint8_t*)&net_offset, (uint8_t*)&net_offset + 4);
+    data.insert(data.end(), (uint8_t*)&net_limit, (uint8_t*)&net_limit + 4);
+    job.data = std::move(data);
     job.response = std::move(p);
     { std::lock_guard<std::mutex> lock(mtx_); jobs_.push(std::move(job)); }
     cv_.notify_one();
@@ -85,7 +117,7 @@ std::future<std::string> HttpAdminSrv::enqueue_serialize() {
     std::promise<std::string> p;
     auto f = p.get_future();
     JobAdmin job;
-    job.type = JobType::SERIALIZE;
+    job.type = JobTypeAdmin::SERIALIZE;
     job.response = std::move(p);
     { std::lock_guard<std::mutex> lock(mtx_); jobs_.push(std::move(job)); }
     cv_.notify_one();
@@ -112,7 +144,7 @@ std::future<std::string> HttpAdminSrv::enqueue_shutdown() {
     std::promise<std::string> p;
     auto f = p.get_future();
     JobAdmin job;
-    job.type = JobType::SHUTDOWN;
+    job.type = JobTypeAdmin::SHUTDOWN;
     job.response = std::move(p);
     { std::lock_guard<std::mutex> lock(mtx_); jobs_.push(std::move(job)); }
     cv_.notify_one();
@@ -172,9 +204,9 @@ void HttpAdminSrv::get_progress(std::shared_ptr<asio::ip::tcp::socket> s) {
 }
 
 void HttpAdminSrv::get_src_types(std::shared_ptr<asio::ip::tcp::socket> s) {
-    Logger::Info("get_src_types: entering, enqueueing request");
+    //Logger::Trace("HttpAdminSrv::get_src_types: entering, enqueueing request");
     auto future = enqueue_src_types();
-    Logger::Info("get_src_types: waiting for future");
+    //Logger::Trace("get_src_types: waiting for future");
     std::string json;
     try {
         json = future.get();
@@ -202,17 +234,119 @@ void HttpAdminSrv::get_train_uml(std::shared_ptr<asio::ip::tcp::socket> s) {
     }
 }
 
+void HttpAdminSrv::send_json_response(std::shared_ptr<asio::ip::tcp::socket> s, const nlohmann::json& json_obj, int status_code) {
+    std::string resp = build_response("application/json", json_obj.dump(), status_code);
+    asio::error_code ec;
+    asio::write(*s, asio::buffer(resp), ec);
+    if(ec) Logger::Error("HttpAdminSrv::send_json_response: {}", ec.message());
+}
+
+void HttpAdminSrv::post_get_table(std::shared_ptr<asio::ip::tcp::socket> s, int content_length, asio::error_code& ec) {
+    Logger::Trace("HttpAdminSrv::post_get_table content_length={}", content_length);
+    std::vector<char> body;
+    read_body(*s, content_length, body, ec);
+    if (ec) {
+        Logger::Error("HttpAdminSrv::post_get_table body read: {}", ec.message());
+        send_json_response(s, {{"error", "Invalid JSON"}}, 400);
+        return;
+    }
+    std::string body_str(body.begin(), body.end());
+    nlohmann::json req;
+    try {
+        req = nlohmann::json::parse(body_str);
+    } catch (...) {
+        send_json_response(s, {{"error", "Invalid JSON"}}, 400);
+        return;
+    }
+    Logger::Trace("HttpAdminSrv::post_get_table body={}", req.dump());
+    std::string table = req.value("table", "");
+    std::string filter = req.value("filter", "");
+    int offset = req.value("offset", 0);
+    int limit = req.value("limit", 100);
+    if (limit > 500) limit = 500;
+    if (table.empty()) {
+        auto future = enqueue_list_tables();
+        try {
+            std::string json_str = future.get();
+            nlohmann::json json_obj = nlohmann::json::parse(json_str);
+            send_json_response(s, json_obj);
+        } catch (const std::exception& err) {
+            Logger::Error("HttpAdminSrv::post_get_table send_json_response: {}", err.what());
+            send_json_response(s, {{"error", err.what()}}, 400);
+        }
+    } else {
+        Logger::Trace("HttpAdminSrv::post_get_table enqueue_get_table {}", table);
+        try {
+            auto future = enqueue_get_table(table, filter, offset, limit);
+            Logger::Trace("HttpAdminSrv::post_get_table future.wait_for {}", table);
+            auto status = future.wait_for(std::chrono::seconds(10));
+            if (status != std::future_status::ready) {
+                auto status_str = (status == std::future_status::timeout) ? "timeout" : "deferred";
+                Logger::Error("HttpAdminSrv::post_get_table status {}", status_str);
+                send_json_response(s, {{"error", "Request timeout (no response from worker)"}}, 504);
+                return;
+            }
+            Logger::Trace("HttpAdminSrv::post_get_table future.get {}", table);
+            std::string json_str = future.get();
+            Logger::Trace("HttpAdminSrv::post_get_table json::parse {}", table);
+            nlohmann::json json_obj = nlohmann::json::parse(json_str);
+            Logger::Trace("HttpAdminSrv::post_get_table send_json_response {}", table);
+            send_json_response(s, json_obj);
+        } catch (const std::exception& err) {
+            Logger::Error("HttpAdminSrv::post_get_table send_json_response: {}; {}", table, err.what());
+            send_json_response(s, {{"error", err.what()}}, 400);
+        }
+    }
+    Logger::Trace("HttpAdminSrv::post_get_table FINISH");
+}
+
+void HttpAdminSrv::get_or_post_show_db(std::shared_ptr<asio::ip::tcp::socket> s, int content_length, asio::error_code& ec) {
+    if (content_length <= 0) {
+        serve_static_file(*s, "static/admin/admin_show_db.html", ec);
+        if(ec) Logger::Error("HttpAdminSrv::get_show_db write error: {}", ec.message());
+        return;
+    }
+    std::vector<char> body;
+    read_body(*s, content_length, body, ec);
+    if (ec) {
+        Logger::Error("HttpAdminSrv::get_show_db body read: {}", ec.message());
+        send_json_response(s, R"({"error":"Invalid JSON"})", 400);
+        return;
+    }
+    std::string body_str(body.begin(), body.end());
+    nlohmann::json req;
+    try {
+        req = nlohmann::json::parse(body_str);
+    } catch (...) {
+        send_json_response(s, R"({"error":"Invalid JSON"})", 400);
+        return;
+    }
+    if (req.value("cmd", "") == "list_tables") {
+        auto future = enqueue_list_tables();
+        try {
+            std::string json_str = future.get();
+            nlohmann::json json_obj = nlohmann::json::parse(json_str);
+            send_json_response(s, json_obj);
+        } catch (const std::exception& err) {
+            nlohmann::json err_obj = {{"error", err.what()}};
+            send_json_response(s, err_obj, 400);
+        }
+    } else {
+        send_json_response(s, R"({"error":"Unknown command"})", 500);
+    }
+}
+
 void HttpAdminSrv::post_root(std::shared_ptr<asio::ip::tcp::socket> s, int content_length, const std::string& content_type) {
     asio::error_code ec;
     if (content_length <= 0) {
-        Logger::Warn("HttpAdminSrv::handle_request: POST without Content-Length");
+        Logger::Warn("HttpAdminSrv::post_root: POST without Content-Length");
         send_response(s, "<html><body><h2>Error: Content-Length required</h2></body></html>");
         return;
     }
     std::vector<char> body;
     read_body(*s, content_length, body, ec);
     if (ec) {
-        Logger::Error("HttpAdminSrv::handle_request body read: {}", ec.message());
+        Logger::Error("HttpAdminSrv::post_root read_body: {}", ec.message());
         return;
     }
     std::string data;
@@ -237,7 +371,7 @@ void HttpAdminSrv::post_root(std::shared_ptr<asio::ip::tcp::socket> s, int conte
         send_response(s, "<html><body><h2>Error: No document content received</h2></body></html>");
         return;
     }
-    Logger::Trace("HttpAdminSrv::handle_request: document received bytes {};", data.size());
+    Logger::Trace("HttpAdminSrv::post_root: document received bytes {};", data.size());
     std::string tags;
     size_t pos = 0;
     while ((pos = bbody.find("name=\"tags\"", pos)) != std::string::npos) {
@@ -254,7 +388,7 @@ void HttpAdminSrv::post_root(std::shared_ptr<asio::ip::tcp::socket> s, int conte
         }
         pos = start;
     }
-    Logger::Trace("HttpAdminSrv::handle_request: tags received {};", tags);
+    Logger::Trace("HttpAdminSrv::post_root: tags received {};", tags);
     bool serialize_flag = true;
     std::string serialize_value;
     pos = 0;
@@ -447,56 +581,70 @@ void HttpAdminSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
         std::string method, path, version, content_type;
         int content_length = -1;
         parse_request(headers, method, path, version, content_type, content_length);
-        //Logger::Trace("HttpAdminSrv::handle_request : {}; {}", method, path);
-        if (method == "GET" && path == "/favicon.ico") {
-            get_favicon(s);
-            return;
-        }
-        else if (method == "GET" && path == "/config") {
-            get_config(s);
-            return;
-        }
-        if (method == "GET" && path == "/progress") {
-            get_progress(s);
-            return;
-        }
-        else if (method == "GET" && path == "/src-types") {
-            get_src_types(s);
-            return;
-        }
-        if (method == "POST" && path == "/") {
-            post_root(s, content_length, content_type);
-            return;
-        }
-        else if (method == "GET" && path == "/train-uml") {
-            get_train_uml(s);
-            return;
-        }
-        else if (method == "POST" && path == "/train-uml") {
-            post_train_uml(s, content_length, content_type);
-            return;
-        }
-        else if (method == "POST" && path == "/serialize") {
-            post_serialize(s);
-            return;
-        }
-        else if (method == "POST" && path == "/stop") {
-            post_shutdown(s);
-            return;
-        }
+        Logger::Trace("HttpAdminSrv::handle_request : {}; {}", method, path);
         if (method == "GET") {
-            if (path == "/") {
+            if (path == "/favicon.ico") {
+                get_favicon(s);
+                return;
+            }
+            else if (path == "/config") {
+                get_config(s);
+                return;
+            }
+            else if (path == "/progress") {
+                get_progress(s);
+                return;
+            }
+            else if (path == "/train_uml") {
+                get_train_uml(s);
+                return;
+            }
+            else if (path == "/src_types") {
+                get_src_types(s);
+                return;
+            }
+            else if (path == "/show_db") {
+                get_or_post_show_db(s, content_length, ec);
+                return;
+            }
+            else if (path == "/") {
                 if (serve_static_file(*s, "static/admin/admin.html", ec)) return;
                 send_response(s, "<html><body><h2>Admin page not found</h2></body></html>");
                 return;
             }
-            if (path.rfind("/static/admin/", 0) == 0) {
+            else if (path.rfind("/static/admin/", 0) == 0) {
                 std::string rel_path = path.substr(1);
                 if (serve_static_file(*s, rel_path, ec)) return;
             }
             std::string not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             asio::write(*s, asio::buffer(not_found), ec);
             return;
+        }
+        else if (method == "POST") {
+            if (path == "/") {
+                post_root(s, content_length, content_type);
+                return;
+            }
+            else if (path == "/train_uml") {
+                post_train_uml(s, content_length, content_type);
+                return;
+            }
+            else if (path == "/show_db") {
+                get_or_post_show_db(s, content_length, ec);
+                return;
+            }
+            else if (path == "/get_table") {
+                post_get_table(s, content_length, ec);
+                return;
+            }
+            else if (path == "/serialize") {
+                post_serialize(s);
+                return;
+            }
+            else if (path == "/stop") {
+                post_shutdown(s);
+                return;
+            }
         }
         std::string not_allowed = "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         asio::write(*s, asio::buffer(not_allowed), ec);

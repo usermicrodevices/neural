@@ -37,8 +37,19 @@ static std::string read_file_into_string(const std::string& path) {
     return buffer.str();
 }
 
-static std::string build_response(const std::string& content_type, const std::string& body) {
-    std::string resp = "HTTP/1.1 200 OK\r\n";
+static std::string build_response(const std::string& content_type, const std::string& body, int status_code=200) {
+    std::string reason;
+    switch (status_code) {
+        case 200: reason = "OK"; break;
+        case 201: reason = "Created"; break;
+        case 400: reason = "Bad Request"; break;
+        case 401: reason = "Unauthorized"; break;
+        case 403: reason = "Forbidden"; break;
+        case 404: reason = "Not Found"; break;
+        case 500: reason = "Internal Server Error"; break;
+        default: reason = "Unknown";
+    }
+    std::string resp = "HTTP/1.1 " + std::to_string(status_code) + " " + reason + "\r\n";
     resp += "Content-Type: " + content_type + "\r\n";
     resp += "Content-Length: " + std::to_string(body.size()) + "\r\n";
     resp += "Connection: close\r\n";

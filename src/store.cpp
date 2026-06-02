@@ -476,7 +476,7 @@ size_t DocumentStore::get_memory_usage() const {
 
 nlohmann::json DocumentStore::get_source_types() {
     std::lock_guard<std::mutex> lock(mtx_);
-    Logger::Trace("get_source_types: preparing query");
+    //Logger::Trace("DocumentStore::get_source_types: preparing query");
     nlohmann::json result = nlohmann::json::array();
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db, "SELECT id, name FROM src_type ORDER BY id", -1, &stmt, nullptr) != SQLITE_OK) {
@@ -519,4 +519,107 @@ void DocumentStore::create_uml_container(const std::string& name,
         sqlite3_reset(stmt);
     }
     sqlite3_finalize(stmt);
+}
+
+nlohmann::json DocumentStore::list_tables() {
+    //std::lock_guard<std::mutex> lock(mtx_);
+    //Logger::Trace("DocumentStore::list_tables");
+    nlohmann::json result = nlohmann::json::array();
+    sqlite3_stmt* stmt;
+    const char* sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Logger::Error("list_tables prepare failed: {}", sqlite3_errmsg(db));
+        return result;
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        result.push_back(name);
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+nlohmann::json DocumentStore::get_table_data(const std::string& table, const std::string& filter, int offset, int limit) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    //Logger::Trace("DocumentStore::get_table_data {}; {}; {}", table, offset, limit);
+    nlohmann::json result;
+    nlohmann::json tables = list_tables();
+    bool found = false;
+    for (const auto& t : tables) if (t == table) { found = true; break; }
+    if (!found) {
+        result["error"] = "Invalid table name";
+        Logger::Warn("DocumentStore::get_table_data invalid table name {}", table);
+        return result;
+    }
+    //Logger::Trace("DocumentStore::get_table_data valid table name {}", table);
+    std::string pragma = "PRAGMA table_info(" + table + ")";
+    sqlite3_stmt* stmt;
+    std::vector<std::string> columns;
+    if (sqlite3_prepare_v2(db, pragma.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* col = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+            columns.push_back(col);
+        }
+        sqlite3_finalize(stmt);
+    }
+    result["columns"] = columns;
+    std::string query = "SELECT * FROM " + table;
+    if (!filter.empty()) {
+        std::vector<std::string> conditions;
+        for (const auto& col : columns) {
+            conditions.push_back("CAST(" + col + " AS TEXT) LIKE '%' || ? || '%'");
+        }
+        query += " WHERE " + conditions[0];
+        for (size_t i = 1; i < conditions.size(); ++i) query += " OR " + conditions[i];
+    }
+    query += " LIMIT ? OFFSET ?";
+    if (sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        int err = sqlite3_errcode(db);
+        if (err == SQLITE_BUSY) {
+            result["error"] = "Database is busy – please retry later";
+            Logger::Warn("DocumentStore::get_table_data: database busy for table {}", table);
+        } else {
+            result["error"] = sqlite3_errmsg(db);
+            Logger::Error("DocumentStore::get_table_data prepare failed: {}", sqlite3_errmsg(db));
+        }
+        return result;
+    }
+    int param_idx = 1;
+    if (!filter.empty()) {
+        int param_count = sqlite3_bind_parameter_count(stmt);
+        for (int i = 1; i <= param_count - 2; ++i) {
+            sqlite3_bind_text(stmt, i, filter.c_str(), -1, SQLITE_TRANSIENT);
+        }
+        param_idx = param_count - 1;
+    }
+    sqlite3_bind_int(stmt, param_idx, limit);
+    sqlite3_bind_int(stmt, param_idx + 1, offset);
+    nlohmann::json rows = nlohmann::json::array();
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        nlohmann::json row = nlohmann::json::array();
+        for (int i = 0; i < sqlite3_column_count(stmt); ++i) {
+            int type = sqlite3_column_type(stmt, i);
+            if (type == SQLITE_INTEGER) {
+                row.push_back(sqlite3_column_int64(stmt, i));
+            } else if (type == SQLITE_FLOAT) {
+                row.push_back(sqlite3_column_double(stmt, i));
+            } else if (type == SQLITE_TEXT) {
+                const char* txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt, i));
+                std::string val = txt ? txt : "";
+                if (val.length() > 100) val = val.substr(0, 100) + "...";
+                row.push_back(val);
+            } else if (type == SQLITE_BLOB) {
+                row.push_back("[BLOB]");
+            } else {
+                row.push_back(nullptr);
+            }
+        }
+        rows.push_back(row);
+    }
+    sqlite3_finalize(stmt);
+    result["rows"] = rows;
+    result["offset"] = offset;
+    result["limit"] = limit;
+    result["has_more"] = (rows.size() == uint64_t(limit));
+    return result;
 }

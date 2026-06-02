@@ -1,6 +1,6 @@
 const mainContent = document.getElementById('mainContent');
 
-function loadHomeView() {
+function ViewTrain() {
     mainContent.innerHTML = `
         <div class="card">
             <h2>🎓 Upload Documents for Learning 📚</h2>
@@ -27,13 +27,15 @@ function loadHomeView() {
     attachHomeEventListeners();
 }
 
-function loadTrainView() {
-    //mainContent.innerHTML = `<div class="card"><h1>🧠 Extended Train Logic</h1><p>Group training and UML attachment – coming soon.</p></div>`;
-    window.location.href = '/train-uml';
+function ViewTrainUml() {
+    window.location.href = '/train_uml';
 }
 
-function loadConfigView() {
-    //mainContent.innerHTML = `<div class="card"><h1>⚙️ Service Configuration</h1><p>Settings page – coming soon.</p></div>`;
+function ViewShowDb() {
+    window.location.href = '/show_db';
+}
+
+function ViewConfig() {
     window.location.href = '/config';
 }
 
@@ -386,19 +388,23 @@ function attachHomeEventListeners() {
     fetchProgress();
 }
 
-document.getElementById('homeBtn').addEventListener('click', () => {
-    loadHomeView();
+document.getElementById('btnTrain').addEventListener('click', () => {
+    ViewTrain();
 });
 
-document.getElementById('trainUmlBtn').addEventListener('click', () => {
-    loadTrainView();
+document.getElementById('btnTrainUml').addEventListener('click', () => {
+    ViewTrainUml();
 });
 
-document.getElementById('configBtn').addEventListener('click', () => {
-    loadConfigView();
+document.getElementById('btnDbShow').addEventListener('click', () => {
+    ViewShowDb();
 });
 
-document.getElementById('stopBtn').addEventListener('click', async () => {
+document.getElementById('btnConfig').addEventListener('click', () => {
+    ViewConfig();
+});
+
+document.getElementById('btnStop').addEventListener('click', async () => {
     if (confirm('Are you sure you want to stop the service?')) {
         try {
             const res = await fetch('/stop', { method: 'POST' });
@@ -410,4 +416,4 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
     }
 });
 
-loadHomeView();
+ViewTrain();

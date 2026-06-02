@@ -10,6 +10,19 @@
 
 #include "logger.hpp"
 
+enum JobTypeAdmin {
+    TRAIN,
+    TRAIN_PROGRESS,
+    TRAIN_DONE,
+    SRC_TYPES,
+    TRAIN_UML,
+    TRAIN_UML_DONE,
+    LIST_TABLES,
+    GET_TABLE,
+    SERIALIZE,
+    SHUTDOWN
+};
+
 struct Message {
     uint8_t cmd;
     std::vector<uint8_t> payload;
