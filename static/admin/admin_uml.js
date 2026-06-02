@@ -1,11 +1,12 @@
-const homeBtn = document.getElementById('homeBtn');
-const trainBtn = document.getElementById('trainUmlBtn');
-const configBtn = document.getElementById('configBtn');
-const stopBtn = document.getElementById('stopBtn');
-homeBtn.onclick = () => window.location.href = '/';
-trainBtn.onclick = () => window.location.href = '/train-uml';
-configBtn.onclick = () => window.location.href = '/config';
-stopBtn.onclick = async () => {
+const btnTrain = document.getElementById('btnTrain');
+const btnTrainUml = document.getElementById('btnTrainUml');
+const btnConfig = document.getElementById('btnConfig');
+const btnStop = document.getElementById('btnStop');
+btnTrain.onclick = () => window.location.href = '/';
+btnTrainUml.onclick = () => window.location.href = '/train_uml';
+btnDbShow.onclick = () => window.location.href = '/show_db';
+btnConfig.onclick = () => window.location.href = '/config';
+btnStop.onclick = async () => {
     if (confirm('Stop the service?')) {
         const res = await fetch('/stop', { method: 'POST' });
         alert((await res.json()).message || 'Stopping...');
@@ -14,12 +15,12 @@ stopBtn.onclick = async () => {
 
 let sourceTypes = [];
 
-async function loadSourceTypes() {
+async function getSourceTypes() {
     try {
-        const res = await fetch('/src-types');
+        const res = await fetch('/src_types');
         sourceTypes = await res.json();
     } catch (err) {
-        console.error('Failed to load source types:', err);
+        console.error('Failed to get source types:', err);
         sourceTypes = [{id:1, name:"C++"}, {id:2, name:"Python"}, {id:3, name:"JS"}];
     }
 }
@@ -72,7 +73,7 @@ document.getElementById('umlForm').onsubmit = async (evt) => {
     const consoleDiv = document.getElementById('statusConsole');
     statusDiv.innerHTML = 'Creating UML container...';
     try {
-        const res = await fetch('/train-uml', { method: 'POST', body: formData });
+        const res = await fetch('/train_uml', { method: 'POST', body: formData });
         const data = await res.json();
         if (data.status === 'ok') {
             statusDiv.innerHTML = '✔️ UML container created successfully.';
@@ -89,6 +90,6 @@ document.getElementById('umlForm').onsubmit = async (evt) => {
     }
 };
 
-loadSourceTypes().then(() => {
+getSourceTypes().then(() => {
     addSourceEntry();
 });
