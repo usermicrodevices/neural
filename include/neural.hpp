@@ -14,6 +14,7 @@ public:
     NeuralNetwork(int input_size, int hidden_size, int output_size);
     void init_random();
     void expand_outputs(int new_output_size);
+    void expand_inputs(int new_input_size);
     std::vector<double> forward(const std::vector<double>& input) const;
     void train_batch(const std::vector<std::vector<double>>& inputs,
                      const std::vector<int>& labels, double lr);

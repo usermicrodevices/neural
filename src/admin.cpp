@@ -581,7 +581,7 @@ void HttpAdminSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
         std::string method, path, version, content_type;
         int content_length = -1;
         parse_request(headers, method, path, version, content_type, content_length);
-        Logger::Trace("HttpAdminSrv::handle_request : {}; {}", method, path);
+        //Logger::Trace("HttpAdminSrv::handle_request : {}; {}", method, path);
         if (method == "GET") {
             if (path == "/favicon.ico") {
                 get_favicon(s);

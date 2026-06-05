@@ -2,52 +2,56 @@
 
 Vocabulary::Vocabulary() : doc_count(0) {}
 
-void Vocabulary::clear() { words.clear(); word2idx.clear(); df.clear(); doc_count = 0; chunk_tfs.clear(); }
+void Vocabulary::clear() { words.clear(); word2idx.clear(); df.clear(); doc_count = 0; }
+
+bool Vocabulary::is_valid_word(const std::string& w) {
+    if (w.length() < 2) return false;
+    bool has_letter = false;
+    for (unsigned char c : w) {
+        if (!std::isalnum(c) && c != '_') return false;
+        if (std::isalpha(c)) has_letter = true;
+    }
+    return has_letter;
+}
+
+std::vector<std::string> Vocabulary::tokenize(const std::string& text) {
+    std::vector<std::string> tokens;
+    const char* p = text.c_str();
+    const char* end = p + text.size();
+    while (p < end) {
+        while (p < end && *p == ' ') ++p;
+        if (p >= end) break;
+        const char* start = p;
+        while (p < end && *p != ' ') ++p;
+        tokens.emplace_back(start, p - start);
+    }
+    return tokens;
+}
 
 int Vocabulary::add_words(const std::string& text) {
-    std::vector<std::string> tokens;
-    std::istringstream iss(text);
-    std::string word;
-    while (iss >> word) {
-        if (word.empty()) continue;
-        tokens.push_back(word);
-    }
+    auto tokens = tokenize(text);
     int added = 0;
-    auto is_valid = [](const std::string& w) -> bool {
-        if (w.length() < 2) return false;
-        bool has_letter = false;
-        for (unsigned char c : w) {
-            if (!std::isalnum(c) && c != '_') return false;
-            if (std::isalpha(c)) has_letter = true;
-        }
-        return has_letter;
-    };
     for (const auto& w : tokens) {
-        if (!is_valid(w)) continue;
-        auto it = word2idx.find(w);
-        if (it == word2idx.end()) {
-            if ((int)words.size() >= MAX_VOCAB) continue;
-            word2idx[w] = words.size();
-            words.push_back(w);
-            df.push_back(0);
-            ++added;
-        }
+        if (!is_valid_word(w)) continue;
+        if (word2idx.find(w) != word2idx.end()) continue;
+        if (static_cast<int>(words.size()) >= MAX_VOCAB) continue;
+        word2idx[w] = static_cast<int>(words.size());
+        words.push_back(w);
+        df.push_back(0);
+        ++added;
     }
     for (size_t i = 0; i + 1 < tokens.size(); ++i) {
         std::string bigram = tokens[i] + "_" + tokens[i+1];
-        if (!is_valid(bigram)) continue;
-        auto it = word2idx.find(bigram);
-        if (it == word2idx.end()) {
-            if ((int)words.size() >= MAX_VOCAB) continue;
-            word2idx[bigram] = words.size();
-            words.push_back(bigram);
-            df.push_back(0);
-            ++added;
-        }
+        if (!is_valid_word(bigram)) continue;
+        if (word2idx.find(bigram) != word2idx.end()) continue;
+        if (static_cast<int>(words.size()) >= MAX_VOCAB) continue;
+        word2idx[bigram] = static_cast<int>(words.size());
+        words.push_back(bigram);
+        df.push_back(0);
+        ++added;
     }
     return added;
 }
-
 
 int Vocabulary::size() const { return words.size(); }
 
@@ -60,10 +64,7 @@ double Vocabulary::idf(int word_idx) const {
 
 std::vector<double> Vocabulary::vectorize(const std::string& text) const {
     std::vector<double> vec(words.size(), 0.0);
-    std::vector<std::string> tokens;
-    std::istringstream iss(text);
-    std::string word;
-    while (iss >> word) tokens.push_back(word);
+    auto tokens = tokenize(text);
     std::unordered_map<int, int> tf;
     for (const auto& w : tokens) {
         auto it = word2idx.find(w);
@@ -75,30 +76,21 @@ std::vector<double> Vocabulary::vectorize(const std::string& text) const {
         if (it != word2idx.end()) tf[it->second]++;
     }
     for (const auto& p : tf) {
-        int idx = p.first;
-        double idf_val = idf(idx);
-        vec[idx] = static_cast<double>(p.second) * idf_val;
+        vec[p.first] = static_cast<double>(p.second) * idf(p.first);
     }
     return vec;
 }
 
 void Vocabulary::add_document(const std::string& text, int chunk_id) {
-    std::vector<std::pair<int,int>> term_freq;
-    std::istringstream iss(text);
-    std::string word;
-    while (iss >> word) {
-        auto it = word2idx.find(word);
-        if (it != word2idx.end()) {
-            int idx = it->second;
-            auto pos = std::find_if(term_freq.begin(), term_freq.end(),
-                [idx](const auto& p) { return p.first == idx; });
-            if (pos == term_freq.end()) term_freq.emplace_back(idx, 1);
-            else pos->second++;
-        }
+    (void)chunk_id;
+    auto tokens = tokenize(text);
+    std::unordered_map<int, int> term_freq;
+    for (const auto& w : tokens) {
+        auto it = word2idx.find(w);
+        if (it != word2idx.end()) term_freq[it->second]++;
     }
-    chunk_tfs.push_back({chunk_id, std::move(term_freq)});
-    for (auto& [idx, cnt] : chunk_tfs.back().tf) {
-        if (idx < static_cast<int>(df.size())) df[idx]++;
+    for (auto& [idx, cnt] : term_freq) {
+        if (idx < static_cast<int>(df.size())) df[idx] += cnt;
     }
     doc_count++;
 }
@@ -130,5 +122,3 @@ void Vocabulary::df_resize(int size, const int default_value){df.resize(size, de
 int Vocabulary::get_doc_count(){return doc_count;}
 
 void Vocabulary::set_doc_count(int value){doc_count = value;}
-
-void Vocabulary::rebuild_chunk_tfs() {}
