@@ -20,16 +20,12 @@ UploadResult DocumentStore::get_last_upload_result() const { return last_upload_
 void DocumentStore::initialize_db() {
     const char* sql =
     "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY, text TEXT UNIQUE) WITHOUT ROWID;"
-    //"CREATE UNIQUE INDEX IF NOT EXISTS chunks_unique ON chunks(text);"
     "CREATE TABLE IF NOT EXISTS vocab (word TEXT PRIMARY KEY, idx INTEGER, df INTEGER) WITHOUT ROWID;"
     "CREATE TABLE IF NOT EXISTS model (layer INTEGER, weights BLOB, biases BLOB);"
     "CREATE TABLE IF NOT EXISTS chunk_tags (chunk_id INTEGER, tag TEXT, PRIMARY KEY (chunk_id, tag)) WITHOUT ROWID;"
-    "CREATE TABLE IF NOT EXISTS src_type (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE);"//AUTOINCREMENT based on ROWID
+    "CREATE TABLE IF NOT EXISTS src_type (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE);"
     "CREATE TABLE IF NOT EXISTS uml (id INTEGER PRIMARY KEY, name TEXT, schema BLOB, UNIQUE(name, schema)) WITHOUT ROWID;"
-    //"CREATE UNIQUE INDEX IF NOT EXISTS uml_unique ON uml(name, schema);"
     "CREATE TABLE IF NOT EXISTS uml_src (id INTEGER PRIMARY KEY AUTOINCREMENT, uml_id INTEGER, src_type_id INTEGER, source BLOB, UNIQUE(uml_id, src_type_id, source));";
-    //"CREATE UNIQUE INDEX IF NOT EXISTS uml_src_unique ON uml_src(uml_id, src_type_id, source);"
-    //"INSERT INTO src_type (name) SELECT 'C++' UNION ALL SELECT 'Python' WHERE NOT EXISTS (SELECT 1 FROM src_type);";
     char* errmsg = nullptr;
     if (sqlite3_exec(db, sql, nullptr, nullptr, &errmsg) != SQLITE_OK) {
         std::string error = errmsg;
@@ -59,16 +55,17 @@ void DocumentStore::load_from_persistent() {
 }
 
 std::string DocumentStore::escape_json(const std::string& s) {
-    std::ostringstream o;
+    std::string o;
+    o.reserve(s.size() + s.size() / 4);
     for (char c : s) {
-        if (c == '"') o << "\\\"";
-        else if (c == '\\') o << "\\\\";
-        else if (c == '\n') o << "\\n";
-        else if (c == '\r') o << "\\r";
-        else if (c == '\t') o << "\\t";
-        else o << c;
+        if (c == '"') o += "\\\"";
+        else if (c == '\\') o += "\\\\";
+        else if (c == '\n') o += "\\n";
+        else if (c == '\r') o += "\\r";
+        else if (c == '\t') o += "\\t";
+        else o += c;
     }
-    return o.str();
+    return o;
 }
 
 void DocumentStore::load_state() {
@@ -139,15 +136,17 @@ void DocumentStore::load_state() {
         net->init_random();
     }
     if (net && vocab->size() != net->input_size()) {
-        if (vocab->size() > 0) {
-            Logger::Warn("Vocabulary size ({}) != network input size ({}). Recreating network.", vocab->size(), net->input_size());
+        if (vocab->size() > net->input_size()) {
+            net->expand_inputs(vocab->size());
+        } else {
+            Logger::Warn("Vocabulary shrunk ({} < {}), keeping network.", vocab->size(), net->input_size());
         }
-        net = std::make_unique<NeuralNetwork>(std::max(1, vocab->size()), HIDDEN_SIZE, net->output_size());
-        net->init_random();
     }
+    vectors_dirty_ = true;
 }
 
 void DocumentStore::save_state() {
+    sqlite3_exec(db, "BEGIN TRANSACTION", nullptr, nullptr, nullptr);
     sqlite3_exec(db, "DELETE FROM vocab; DELETE FROM model;", nullptr, nullptr, nullptr);
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db, "INSERT INTO vocab(word, idx, df) VALUES(?,?,?)", -1, &stmt, nullptr);
@@ -171,19 +170,12 @@ void DocumentStore::save_state() {
     };
     save_layer(1, net->GetW1(), net->GetB1());
     save_layer(2, net->GetW2(), net->GetB2());
+    sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr);
 }
 
-void DocumentStore::add_tag(const std::string& tag, int chunk_id) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    std::string cleaned_tag = clean_text(tag);
-    sqlite3_stmt* insert_tag = nullptr;
-    sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO chunk_tags(chunk_id, tag) VALUES(?,?)", -1, &insert_tag, nullptr);
-    sqlite3_bind_int(insert_tag, 1, chunk_id);
-    sqlite3_bind_text(insert_tag, 2, cleaned_tag.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_step(insert_tag);
-    sqlite3_finalize(insert_tag);
-    std::vector<std::vector<double>> X;
-    std::vector<int> Y;
+void DocumentStore::rebuild_vector_cache() {
+    cached_vectors_.clear();
+    cached_ids_.clear();
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db, "SELECT id, text FROM chunks ORDER BY id", -1, &stmt, nullptr);
     while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -191,55 +183,98 @@ void DocumentStore::add_tag(const std::string& tag, int chunk_id) {
         std::string raw_txt(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
         std::string clean_txt = clean_text(raw_txt);
         auto vec = vocab->vectorize(clean_txt);
-        X.push_back(vec);
-        Y.push_back(id - 1);
+        sqlite3_stmt* tag_stmt = nullptr;
+        sqlite3_prepare_v2(db, "SELECT tag FROM chunk_tags WHERE chunk_id=?", -1, &tag_stmt, nullptr);
+        sqlite3_bind_int(tag_stmt, 1, id);
+        while (sqlite3_step(tag_stmt) == SQLITE_ROW) {
+            std::string tag_str(reinterpret_cast<const char*>(sqlite3_column_text(tag_stmt, 0)));
+            auto tag_vec = vocab->vectorize(tag_str);
+            for (size_t i = 0; i < vec.size(); ++i) vec[i] += tag_vec[i];
+        }
+        sqlite3_finalize(tag_stmt);
+        cached_vectors_.push_back(std::move(vec));
+        cached_ids_.push_back(id);
     }
     sqlite3_finalize(stmt);
-    int total_chunks = (int)X.size();
+    vectors_dirty_ = false;
+}
+
+void DocumentStore::ensure_vector_cache() {
+    if (vectors_dirty_) rebuild_vector_cache();
+}
+
+void DocumentStore::add_tag(const std::string& tag, int chunk_id) {
+    std::unique_lock lock(mtx_);
+    std::string cleaned_tag = clean_text(tag);
+    sqlite3_stmt* insert_tag = nullptr;
+    sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO chunk_tags(chunk_id, tag) VALUES(?,?)", -1, &insert_tag, nullptr);
+    sqlite3_bind_int(insert_tag, 1, chunk_id);
+    sqlite3_bind_text(insert_tag, 2, cleaned_tag.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(insert_tag);
+    sqlite3_finalize(insert_tag);
+    vectors_dirty_ = true;
+    ensure_vector_cache();
+    int total_chunks = static_cast<int>(cached_vectors_.size());
     if (total_chunks > net->output_size()) {
         net->expand_outputs(total_chunks);
     }
+    std::vector<int> Y;
+    Y.reserve(total_chunks);
+    for (int id : cached_ids_) Y.push_back(id - 1);
     const int epochs = 20;
     for (int e = 0; e < epochs; ++e) {
-        net->train_batch(X, Y, 0.01);
+        net->train_batch(cached_vectors_, Y, 0.01);
     }
     save_state();
 }
 
 void DocumentStore::add_document(const std::string& text, const std::string& tags,
                                  std::function<void(int)> progress_cb, bool serialization) {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::unique_lock lock(mtx_);
     Logger::Trace("DocumentStore::add_document adding document ({} bytes)", text.size());
     auto raw_chunks = split_into_chunks(text);
     Logger::Trace("DocumentStore::add_document split into {} chunks", raw_chunks.size());
     std::vector<std::string> tag_phrases;
-    std::stringstream ss(tags);
-    std::string tag;
-    while (std::getline(ss, tag, ';')) {
-        size_t first = tag.find_first_not_of(" \t\n\r");
-        if (first == std::string::npos) continue;
-        size_t last = tag.find_last_not_of(" \t\n\r");
-        tag = tag.substr(first, last - first + 1);
-        if (tag.empty()) continue;
-        std::replace(tag.begin(), tag.end(), ' ', '_');
-        tag_phrases.push_back(tag);
-    }
-    std::vector<std::string> unique_chunks;
-    sqlite3_stmt* duplicate_stmt = nullptr;
-    sqlite3_prepare_v2(db, "SELECT 1 FROM chunks WHERE text = ? LIMIT 1", -1, &duplicate_stmt, nullptr);
-    uint duplicate_count = 0;
-    for (const auto& raw_ch : raw_chunks) {
-        sqlite3_reset(duplicate_stmt);
-        sqlite3_bind_text(duplicate_stmt, 1, raw_ch.c_str(), -1, SQLITE_TRANSIENT);
-        bool is_duplicate = (sqlite3_step(duplicate_stmt) == SQLITE_ROW);
-        if (!is_duplicate) {
-            unique_chunks.push_back(raw_ch);
-        } else {
-            Logger::Warn("DocumentStore::add_document duplicate chunk skipped: {}", raw_ch.substr(0, 10));
-            duplicate_count++;
+    {
+        const char* p = tags.c_str();
+        const char* end = p + tags.size();
+        while (p < end) {
+            while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) ++p;
+            if (p >= end) break;
+            const char* start = p;
+            while (p < end && *p != ';') ++p;
+            std::string tp(start, p - start);
+            while (!tp.empty() && (tp.back() == ' ' || tp.back() == '\t' || tp.back() == '\n' || tp.back() == '\r'))
+                tp.pop_back();
+            if (!tp.empty()) {
+                std::replace(tp.begin(), tp.end(), ' ', '_');
+                tag_phrases.push_back(std::move(tp));
+            }
+            if (p < end) ++p;
         }
     }
-    sqlite3_finalize(duplicate_stmt);
+
+    std::unordered_set<std::string> existing_chunks;
+    {
+        sqlite3_stmt* check_stmt = nullptr;
+        sqlite3_prepare_v2(db, "SELECT text FROM chunks", -1, &check_stmt, nullptr);
+        while (sqlite3_step(check_stmt) == SQLITE_ROW) {
+            existing_chunks.insert(reinterpret_cast<const char*>(sqlite3_column_text(check_stmt, 0)));
+        }
+        sqlite3_finalize(check_stmt);
+    }
+
+    std::vector<std::string> unique_chunks;
+    uint duplicate_count = 0;
+    for (const auto& raw_ch : raw_chunks) {
+        if (existing_chunks.count(raw_ch)) {
+            Logger::Warn("DocumentStore::add_document duplicate chunk skipped: {}", raw_ch.substr(0, 10));
+            duplicate_count++;
+        } else {
+            unique_chunks.push_back(raw_ch);
+        }
+    }
+
     if (unique_chunks.empty()) {
         last_upload_result_ = UploadResult::DUPLICATE;
         Logger::Warn("DocumentStore::add_document document is full duplicate.");
@@ -249,9 +284,9 @@ void DocumentStore::add_document(const std::string& text, const std::string& tag
     } else {
         last_upload_result_ = UploadResult::OK;
     }
+
     for (const auto& tp : tag_phrases) {
-        std::string cleaned_tag = clean_text(tp);
-        vocab->add_words(cleaned_tag);
+        vocab->add_words(tp);
     }
     int old_vocab_size = vocab->size();
     for (const auto& raw_ch : unique_chunks) {
@@ -260,11 +295,14 @@ void DocumentStore::add_document(const std::string& text, const std::string& tag
     }
     int new_vocab_size = vocab->size();
     Logger::Trace("DocumentStore::add_document vocabulary size: {} -> {}", old_vocab_size, new_vocab_size);
+
     int next_id = 0;
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(id),0)+1 FROM chunks", -1, &stmt, nullptr);
     if (sqlite3_step(stmt) == SQLITE_ROW) next_id = sqlite3_column_int(stmt, 0);
     sqlite3_finalize(stmt);
+
+    sqlite3_exec(db, "BEGIN TRANSACTION", nullptr, nullptr, nullptr);
     sqlite3_stmt* insert_chunk = nullptr;
     sqlite3_prepare_v2(db, "INSERT INTO chunks(id, text) VALUES(?,?)", -1, &insert_chunk, nullptr);
     sqlite3_stmt* insert_tag = nullptr;
@@ -288,42 +326,33 @@ void DocumentStore::add_document(const std::string& text, const std::string& tag
     }
     sqlite3_finalize(insert_chunk);
     sqlite3_finalize(insert_tag);
+    sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr);
+
     int total_chunks = 0;
     sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM chunks", -1, &stmt, nullptr);
     if (sqlite3_step(stmt) == SQLITE_ROW) total_chunks = sqlite3_column_int(stmt, 0);
     sqlite3_finalize(stmt);
+
     if (new_vocab_size > old_vocab_size) {
-        auto new_net = std::make_unique<NeuralNetwork>(new_vocab_size, HIDDEN_SIZE, net->output_size());
-        new_net->init_random();
-        net = std::move(new_net);
+        if (new_vocab_size > net->input_size()) {
+            net->expand_inputs(new_vocab_size);
+        }
     }
     if (total_chunks > net->output_size()) {
         net->expand_outputs(total_chunks);
     }
-    std::vector<std::vector<double>> X;
+
+    vectors_dirty_ = true;
+    ensure_vector_cache();
+
+    int new_count = static_cast<int>(cached_vectors_.size());
     std::vector<int> Y;
-    sqlite3_prepare_v2(db, "SELECT id, text FROM chunks ORDER BY id", -1, &stmt, nullptr);
-    sqlite3_stmt* tag_stmt = nullptr;
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        std::string raw_txt(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
-        std::string clean_txt = clean_text(raw_txt);
-        auto vec = vocab->vectorize(clean_txt);
-        sqlite3_prepare_v2(db, "SELECT tag FROM chunk_tags WHERE chunk_id=?", -1, &tag_stmt, nullptr);
-        sqlite3_bind_int(tag_stmt, 1, id);
-        while (sqlite3_step(tag_stmt) == SQLITE_ROW) {
-            std::string tag_str(reinterpret_cast<const char*>(sqlite3_column_text(tag_stmt, 0)));
-            auto tag_vec = vocab->vectorize(tag_str);
-            for (size_t i = 0; i < vec.size(); ++i) vec[i] += tag_vec[i];
-        }
-        sqlite3_finalize(tag_stmt);
-        X.push_back(vec);
-        Y.push_back(id - 1);
-    }
-    sqlite3_finalize(stmt);
+    Y.reserve(new_count);
+    for (int id : cached_ids_) Y.push_back(id - 1);
+
     const int epochs = 100;
     for (int e = 0; e < epochs; ++e) {
-        net->train_batch(X, Y, 0.01);
+        net->train_batch(cached_vectors_, Y, 0.01);
         if (progress_cb) progress_cb(static_cast<int>((e+1)*100.0/epochs));
     }
     save_state();
@@ -332,13 +361,9 @@ void DocumentStore::add_document(const std::string& text, const std::string& tag
 }
 
 std::string DocumentStore::get_answer(const std::string& prompt, double threshold) {
-    //Logger::Trace("DocumentStore::get_answer confidence threshold: {}; question: {}", threshold, prompt);
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::shared_lock lock(mtx_);
     std::string cleaned = clean_text(prompt);
-    std::vector<std::string> tokens;
-    std::istringstream iss(cleaned);
-    std::string word;
-    while (iss >> word) tokens.push_back(word);
+    auto tokens = Vocabulary::tokenize(cleaned);
     std::set<std::string> candidate_tags;
     for (const auto& w : tokens) candidate_tags.insert(w);
     for (size_t i = 0; i + 1 < tokens.size(); ++i) candidate_tags.insert(tokens[i] + "_" + tokens[i+1]);
@@ -349,7 +374,6 @@ std::string DocumentStore::get_answer(const std::string& prompt, double threshol
             tag_placeholders += "?";
         }
         std::string tag_query = "SELECT DISTINCT chunk_id FROM chunk_tags WHERE tag IN (" + tag_placeholders + ")";
-        //Logger::Trace("DocumentStore::get_answer tag_query: {}", tag_query);
         sqlite3_stmt* tag_stmt = nullptr;
         if (sqlite3_prepare_v2(db, tag_query.c_str(), -1, &tag_stmt, nullptr) != SQLITE_OK) {
             Logger::Error("Tag query prepare failed: {}", sqlite3_errmsg(db));
@@ -382,13 +406,10 @@ std::string DocumentStore::get_answer(const std::string& prompt, double threshol
     }
     auto vec = vocab->vectorize(prompt);
     if ((int)vec.size() != net->input_size()) {
-        Logger::Error("DocumentStore::get_answer vocabulary size ({}) != network input size ({}). Reinitializing network.", vec.size(), net->input_size());
-        net = std::make_unique<NeuralNetwork>(vec.size(), HIDDEN_SIZE, net->output_size());
-        net->init_random();
-        return R"({"answer":"Model mismatch. Please re‑upload documents.","chunk_id":-1})";
+        Logger::Error("DocumentStore::get_answer vocabulary size ({}) != network input size ({}).", vec.size(), net->input_size());
+        return R"({"answer":"Model mismatch. Please re-upload documents.","chunk_id":-1})";
     }
     auto [idx, conf] = net->predict(vec);
-    //Logger::Trace("DocumentStore::get_answer prediction: chunk {}, confidence {:.4f}", idx, conf);
     if (conf < threshold) {
         std::ostringstream msg;
         msg << "I don't have enough confidence information yet. (confidence: " << conf << "). Please ask again later or lower the threshold.";
@@ -405,23 +426,29 @@ std::string DocumentStore::get_answer(const std::string& prompt, double threshol
         result = R"({"chunk_id":-1,"answer":"No chunk found"})";
     }
     sqlite3_finalize(stmt);
-    Logger::Trace("DocumentStore::get_answer {}", result.substr(0, 150));
     return result;
 }
 
 std::vector<std::string> DocumentStore::split_into_chunks(const std::string& text) {
     std::vector<std::string> chunks;
-    std::istringstream stream(text);
-    std::string line, current;
-    while (std::getline(stream, line, '\n')) {
-        if (!current.empty() && current.size() + line.size() + 1 > MAX_CHUNK_SIZE) {
-            chunks.push_back(current);
+    const char* p = text.c_str();
+    const char* end = p + text.size();
+    std::string current;
+    current.reserve(MAX_CHUNK_SIZE);
+    while (p < end) {
+        const char* line_start = p;
+        while (p < end && *p != '\n') ++p;
+        size_t line_len = p - line_start;
+        if (!current.empty() && current.size() + line_len + 1 > MAX_CHUNK_SIZE) {
+            chunks.push_back(std::move(current));
             current.clear();
+            current.reserve(MAX_CHUNK_SIZE);
         }
         if (!current.empty()) current += '\n';
-        current += line;
+        current.append(line_start, line_len);
+        if (p < end) ++p;
     }
-    if (!current.empty()) chunks.push_back(current);
+    if (!current.empty()) chunks.push_back(std::move(current));
     if (chunks.empty() && !text.empty())
         chunks.push_back(text);
     return chunks;
@@ -429,6 +456,7 @@ std::vector<std::string> DocumentStore::split_into_chunks(const std::string& tex
 
 std::string DocumentStore::clean_text(const std::string& text) {
     std::string out;
+    out.reserve(text.size());
     for (unsigned char c : text) {
         if (std::isalnum(c) || c == '.' || c == ' ' || c == '_')
             out += static_cast<char>(c);
@@ -442,24 +470,21 @@ void DocumentStore::serialize() {
     sqlite3* file_db = nullptr;
     int err_code = sqlite3_open(persistent_path.c_str(), &file_db);
     if (err_code != SQLITE_OK){
-        Logger::Error("🚫DocumentStore::serialize: failed to open persistent DB for writing; error code {}", err_code);
+        Logger::Error("DocumentStore::serialize: failed to open persistent DB for writing; error code {}", err_code);
         return;
     }
-    //else Logger::Trace("👌DocumentStore::serialize success sqlite3_open file {}", persistent_path);
     sqlite3_backup* backup = sqlite3_backup_init(file_db, "main", db, "main");
     if (backup) {
         sqlite3_backup_step(backup, -1);
         err_code = sqlite3_backup_finish(backup);
         if (err_code != SQLITE_OK)
-            Logger::Error("🚫DocumentStore::serialize: failed sqlite3_backup_finish file {}; error code {}", persistent_path, err_code);
-        //else Logger::Trace("👌DocumentStore::serialize in‑memory DB to {}", persistent_path);
+            Logger::Error("DocumentStore::serialize: failed sqlite3_backup_finish file {}; error code {}", persistent_path, err_code);
     }
     else
-        Logger::Error("🚫DocumentStore::serialize sqlite3_backup_init");
+        Logger::Error("DocumentStore::serialize sqlite3_backup_init");
     err_code = sqlite3_close(file_db);
     if (err_code != SQLITE_OK)
-        Logger::Error("🚫DocumentStore::serialize: failed sqlite3_close file {}; error code {}", persistent_path, err_code);
-    //else Logger::Trace("👌DocumentStore::serialize success sqlite3_close file {}", persistent_path);
+        Logger::Error("DocumentStore::serialize: failed sqlite3_close file {}; error code {}", persistent_path, err_code);
 }
 
 size_t DocumentStore::get_memory_usage() const {
@@ -475,8 +500,7 @@ size_t DocumentStore::get_memory_usage() const {
 }
 
 nlohmann::json DocumentStore::get_source_types() {
-    std::lock_guard<std::mutex> lock(mtx_);
-    //Logger::Trace("DocumentStore::get_source_types: preparing query");
+    std::shared_lock lock(mtx_);
     nlohmann::json result = nlohmann::json::array();
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db, "SELECT id, name FROM src_type ORDER BY id", -1, &stmt, nullptr) != SQLITE_OK) {
@@ -488,17 +512,15 @@ nlohmann::json DocumentStore::get_source_types() {
         entry["id"] = sqlite3_column_int(stmt, 0);
         entry["name"] = std::string(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
         result.push_back(entry);
-        //Logger::Trace("get_source_types: added id={}, name={}", entry["id"], entry["name"]);
     }
     sqlite3_finalize(stmt);
-    //Logger::Trace("get_source_types: returning {} entries", result.size());
     return result;
 }
 
 void DocumentStore::create_uml_container(const std::string& name,
                                           const std::string& uml_schema,
                                           const std::vector<std::pair<uint8_t, std::string>>& sources) {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::unique_lock lock(mtx_);
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db, "INSERT INTO uml(name, schema) VALUES(?,?)", -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
@@ -522,8 +544,7 @@ void DocumentStore::create_uml_container(const std::string& name,
 }
 
 nlohmann::json DocumentStore::list_tables() {
-    //std::lock_guard<std::mutex> lock(mtx_);
-    //Logger::Trace("DocumentStore::list_tables");
+    std::shared_lock lock(mtx_);
     nlohmann::json result = nlohmann::json::array();
     sqlite3_stmt* stmt;
     const char* sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name";
@@ -540,8 +561,7 @@ nlohmann::json DocumentStore::list_tables() {
 }
 
 nlohmann::json DocumentStore::get_table_data(const std::string& table, const std::string& filter, int offset, int limit) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    //Logger::Trace("DocumentStore::get_table_data {}; {}; {}", table, offset, limit);
+    std::shared_lock lock(mtx_);
     nlohmann::json result;
     nlohmann::json tables = list_tables();
     bool found = false;
@@ -551,7 +571,6 @@ nlohmann::json DocumentStore::get_table_data(const std::string& table, const std
         Logger::Warn("DocumentStore::get_table_data invalid table name {}", table);
         return result;
     }
-    //Logger::Trace("DocumentStore::get_table_data valid table name {}", table);
     std::string pragma = "PRAGMA table_info(" + table + ")";
     sqlite3_stmt* stmt;
     std::vector<std::string> columns;
@@ -620,6 +639,6 @@ nlohmann::json DocumentStore::get_table_data(const std::string& table, const std
     result["rows"] = rows;
     result["offset"] = offset;
     result["limit"] = limit;
-    result["has_more"] = (rows.size() == uint64_t(limit));
+    result["has_more"] = (limit > 0) && (static_cast<int>(rows.size()) == limit);
     return result;
 }

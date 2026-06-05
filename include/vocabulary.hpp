@@ -4,17 +4,11 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <sstream>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <unordered_map>
 #include <utility>
-
-struct ChunkTF {
-    int id;
-    std::vector<std::pair<int,int>> tf;
-
-};
 
 class Vocabulary {
 public:
@@ -41,11 +35,12 @@ public:
     int get_doc_count();
     void set_doc_count(int value);
 
+    static std::vector<std::string> tokenize(const std::string& text);
+    static bool is_valid_word(const std::string& w);
+
 private:
     std::vector<std::string> words;
     std::unordered_map<std::string, int> word2idx;
     std::vector<int> df;
     int doc_count;
-    std::vector<ChunkTF> chunk_tfs;
-    void rebuild_chunk_tfs();
 };

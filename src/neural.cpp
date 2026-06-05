@@ -28,6 +28,22 @@ void NeuralNetwork::init_random() {
     for (auto& v : b2) v = 0.0;
 }
 
+void NeuralNetwork::expand_inputs(int new_input_size) {
+    if (new_input_size <= in) return;
+    std::vector<double> newW1(new_input_size * hn);
+    for (int i = 0; i < in; ++i)
+        for (int j = 0; j < hn; ++j)
+            newW1[i * hn + j] = W1[i * hn + j];
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::normal_distribution<double> dist(0.0, 0.1);
+    for (int i = in; i < new_input_size; ++i)
+        for (int j = 0; j < hn; ++j)
+            newW1[i * hn + j] = dist(gen);
+    W1.swap(newW1);
+    in = new_input_size;
+}
+
 void NeuralNetwork::expand_outputs(int new_output_size) {
     if (new_output_size <= out) return;
     std::vector<double> newW2(hn * new_output_size);
