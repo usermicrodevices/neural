@@ -528,35 +528,38 @@ void HttpAdminSrv::post_train_uml(std::shared_ptr<asio::ip::tcp::socket> s, int 
         break;
     }
     std::vector<uint8_t> payload;
-    payload.push_back(0); payload.push_back(0);
+    uint32_t net_name_len = htonl(uml_name.size());
+    payload.insert(payload.end(), (uint8_t*)&net_name_len, (uint8_t*)&net_name_len + 4);
     payload.insert(payload.end(), uml_name.begin(), uml_name.end());
-    payload.push_back(0);
+    uint32_t net_schema_len = htonl(uml_content.size());
+    payload.insert(payload.end(), (uint8_t*)&net_schema_len, (uint8_t*)&net_schema_len + 4);
     payload.insert(payload.end(), uml_content.begin(), uml_content.end());
-    payload.push_back(0);
     uint16_t count = htons(source_pairs.size());
     payload.insert(payload.end(), (uint8_t*)&count, (uint8_t*)&count + 2);
     for (auto& p : source_pairs) {
+        if (p.first == 0) p.first = 1;
         payload.push_back(p.first);
         uint32_t size = htonl(p.second.size());
         payload.insert(payload.end(), (uint8_t*)&size, (uint8_t*)&size + 4);
         payload.insert(payload.end(), p.second.begin(), p.second.end());
     }
     auto future = enqueue_train_uml(payload);
+    std::string resp = R"({"status":"accepted","message":"Train UML started"})";
+    std::string http_resp = build_response("application/json", resp);
+    asio::write(*s, asio::buffer(http_resp), ec);
+    if(ec) { Logger::Error("HttpAdminSrv::post_train_uml asio::write: {}", ec.message()); return; }
     std::thread([future = std::move(future), s]() mutable {
-        asio::error_code ec;
+        asio::error_code ec2;
         try {
             future.get();
             std::string resp = R"({"status":"ok","message":"Train UML finished"})";
-            asio::write(*s, asio::buffer(build_response("application/json", resp)), ec);
+            asio::write(*s, asio::buffer(build_response("application/json", resp)), ec2);
         } catch (const std::exception& err) {
             std::string resp = R"({"status":"error","message":")" + std::string(err.what()) + "\"}";
-            asio::write(*s, asio::buffer(build_response("application/json", resp)), ec);
-            if(ec) Logger::Error("HttpAdminSrv::post_train_uml asio::write: {}", ec.message());
+            asio::write(*s, asio::buffer(build_response("application/json", resp)), ec2);
+            if(ec2) Logger::Error("HttpAdminSrv::post_train_uml asio::write: {}", ec2.message());
         }
     }).detach();
-    std::string resp = R"({"status":"accepted","message":"Train UML started"})";
-    asio::write(*s, asio::buffer(build_response("application/json", resp)), ec);
-    if(ec) Logger::Error("HttpAdminSrv::post_train_uml asio::write: {}", ec.message());
 }
 
 void HttpAdminSrv::post_shutdown(std::shared_ptr<asio::ip::tcp::socket> s) {

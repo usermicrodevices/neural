@@ -73,7 +73,14 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
                     sock.send(Message{JobTypeAdmin::TRAIN_UML, job.data});
                     Message ack = sock.recv();
                     if (ack.cmd == JobTypeAdmin::TRAIN_UML_DONE) {
-                        job.response.set_value("");
+                        bool ok = !ack.payload.empty() && ack.payload[0] == 1;
+                        if (ok) {
+                            job.response.set_value("");
+                        } else {
+                            job.response.set_exception(
+                                std::make_exception_ptr(
+                                    std::runtime_error("TRAIN_UML failed: database insert error")));
+                        }
                     } else {
                         throw std::runtime_error("WorkerAdmin::runChild unexpected response for TRAIN_UML");
                     }
