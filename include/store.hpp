@@ -37,8 +37,10 @@ public:
     void serialize();
     UploadResult get_last_upload_result() const;
     void add_tag(const std::string& tag, int chunk_id);
-    void create_uml_container(const std::string& name, const std::string& uml_schema,
+    bool create_uml_container(const std::string& name, const std::string& uml_schema,
                               const std::vector<std::pair<uint8_t, std::string>>& sources);
+    nlohmann::json get_uml_container(const std::string& name);
+    nlohmann::json search_uml(const std::string& query);
     nlohmann::json list_tables();
     nlohmann::json get_table_data(const std::string& table, const std::string& filter, int offset = 0, int limit = 100);
 

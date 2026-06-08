@@ -66,33 +66,66 @@ void WorkerMaster::run() {
                     }
                     case JobTypeAdmin::TRAIN_UML: {
                         auto it = msg.payload.begin();
-                        it++; it++;
-                        std::string name, uml_schema;
-                        while (it != msg.payload.end() && *it != 0) name.push_back(*it++);
-                        if (it != msg.payload.end()) ++it;
-                        while (it != msg.payload.end() && *it != 0) uml_schema.push_back(*it++);
-                        if (it != msg.payload.end()) ++it;
-                        if (it + 2 > msg.payload.end()) break;
+                        auto end = msg.payload.end();
+                        if (it + 8 > end) {
+                            admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {0}});
+                            break;
+                        }
+                        uint32_t net_name_len;
+                        std::memcpy(&net_name_len, &*it, 4);
+                        uint32_t name_len = ntohl(net_name_len);
+                        it += 4;
+                        if (it + name_len > end) {
+                            admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {0}});
+                            break;
+                        }
+                        std::string name(it, it + name_len);
+                        it += name_len;
+                        if (it + 4 > end) {
+                            admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {0}});
+                            break;
+                        }
+                        uint32_t net_schema_len;
+                        std::memcpy(&net_schema_len, &*it, 4);
+                        uint32_t schema_len = ntohl(net_schema_len);
+                        it += 4;
+                        if (it + schema_len > end) {
+                            admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {0}});
+                            break;
+                        }
+                        std::string uml_schema(it, it + schema_len);
+                        it += schema_len;
+                        if (it + 2 > end) {
+                            admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {0}});
+                            break;
+                        }
                         uint16_t count;
                         std::memcpy(&count, &*it, 2);
                         count = ntohs(count);
                         it += 2;
                         std::vector<std::pair<uint8_t, std::string>> sources;
+                        bool parse_ok = true;
                         for (uint16_t i = 0; i < count; ++i) {
-                            if (it == msg.payload.end()) break;
+                            if (it == end) { parse_ok = false; break; }
                             uint8_t src_type = *it++;
-                            if (it + 4 > msg.payload.end()) break;
+                            if (src_type == 0) src_type = 1;
+                            if (it + 4 > end) { parse_ok = false; break; }
                             uint32_t size;
                             std::memcpy(&size, &*it, 4);
                             size = ntohl(size);
                             it += 4;
-                            if (it + size > msg.payload.end()) break;
+                            if (it + size > end) { parse_ok = false; break; }
                             std::string content(it, it + size);
                             it += size;
                             sources.emplace_back(src_type, content);
                         }
-                        store_->create_uml_container(name, uml_schema, sources);
-                        admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {}});
+                        if (!parse_ok || sources.size() != count) {
+                            Logger::Error("WorkerMaster::run: TRAIN_UML parse failed (expected {} sources, got {})", count, sources.size());
+                            admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {0}});
+                            break;
+                        }
+                        bool ok = store_->create_uml_container(name, uml_schema, sources);
+                        admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {static_cast<uint8_t>(ok ? 1 : 0)}});
                         break;
                     }
                     case JobTypeAdmin::GET_TABLE: {
