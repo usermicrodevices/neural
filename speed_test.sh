@@ -37,13 +37,13 @@ die() { echo -e "${RED}FATAL: $*${NC}" >&2; exit 1; }
 cleanup() {
     curl -sf -X POST "${ADMIN_URL}/stop" 2>/dev/null || true
     wait "${SERVER_PID:-}" 2>/dev/null || true
+    kill "${SERVER_PID:-}" 2>/dev/null || true
 }
 
 send_doc() {
     local file="$1" tags="${2:-}" serialize="${3:-0}"
     curl -sf -X POST "${ADMIN_URL}/" \
-        -H "Content-Type: multipart/form-data; boundary=--b$(date +%s%N)" \
-        -F "document@${file}" \
+        -F "document=@${file}" \
         -F "tags=${tags}" \
         -F "serialize=${serialize}" 2>/dev/null
 }
@@ -105,7 +105,7 @@ for f in "${SRC_DIR}"/*.cpp; do
     sz=$(stat -c%s "$f")
 
     ms=$(time_ms send_doc "$f" "vtest_$local_name" 0)
-    wait_done 60
+    wait_done 30
 
     results+=("${local_name}|${sz}|${ms}")
     printf "  %-20s %8s B  %7s ms\n" "$local_name" "$sz" "$ms"
