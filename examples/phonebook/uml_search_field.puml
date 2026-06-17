@@ -1,0 +1,15 @@
+@startuml SearchField
+class SearchField {
+    +String query
+    +void onInput(String text)
+}
+class ButtonSearch {
+    +void onClick()
+}
+class SearchResult {
+    +Vector<PhoneEntry> items
+    +void display()
+}
+SearchField --> ButtonSearch : triggers search
+ButtonSearch --> SearchResult : populates results
+@enduml

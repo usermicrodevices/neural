@@ -1,0 +1,18 @@
+@startuml PhoneTable
+class PhoneEntry {
+    +int id
+    +String name
+    +String phone
+    +String email
+    +void save()
+    +void remove()
+}
+class PhoneBook {
+    +Vector<PhoneEntry> entries
+    +void addEntry(PhoneEntry e)
+    +void removeEntry(int id)
+    +PhoneEntry findById(int id)
+    +Vector<PhoneEntry> findAll()
+}
+PhoneBook o-- PhoneEntry : contains
+@enduml
