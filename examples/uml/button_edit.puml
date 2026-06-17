@@ -1,0 +1,13 @@
+@startuml ButtonEdit
+class ButtonEdit {
+    +void onClick(int rowId)
+    +void bindToTable(DataTable t)
+}
+class DataTable {
+    +int selectedRowId
+    +void loadRecord(Record r)
+    +void refresh()
+}
+ButtonEdit --> DataTable : reads selected row
+ButtonEdit --> Record : loads data
+@enduml

@@ -74,10 +74,12 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
                     sock.send(Message{JobTypeAdmin::TRAIN_UML, job.data});
                     Message ack = sock.recv();
                     if (ack.cmd == JobTypeAdmin::TRAIN_UML_DONE) {
-                        bool ok = !ack.payload.empty() && ack.payload[0] == 1;
+                        uint8_t result = ack.payload.empty() ? 0 : ack.payload[0];
                         server.set_training_done();
-                        if (ok) {
+                        if (result == 1) {
                             job.response.set_value("");
+                        } else if (result == 2) {
+                            job.response.set_value("duplicate");
                         } else {
                             job.response.set_exception(
                                 std::make_exception_ptr(
@@ -191,6 +193,7 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
                 server.stop();
                 return;
             }
+            default: break;
         }
     }
     server.stop();

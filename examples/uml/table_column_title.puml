@@ -1,0 +1,19 @@
+@startuml TableColumnTitle
+class TableColumnTitle {
+    +String text
+    +String alignment
+    +int columnIndex
+    +bool sortable
+    +bool isFilterable
+    +void setText(String t)
+    +void setAlignment(String a)
+    +String render()
+    +void enableSort()
+    +void enableFilter()
+}
+class TableColumn {
+    +int index
+    +String title
+}
+TableColumnTitle --> TableColumn : labels
+@enduml

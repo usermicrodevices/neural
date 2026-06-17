@@ -1,0 +1,16 @@
+@startuml TableRowTitle
+class TableRowTitle {
+    +String text
+    +String alignment
+    +int rowIndex
+    +bool isHeader
+    +void setText(String t)
+    +void setAlignment(String a)
+    +String render()
+    +void markAsHeader()
+}
+class TableRow {
+    +int index
+}
+TableRowTitle --> TableRow : labels
+@enduml

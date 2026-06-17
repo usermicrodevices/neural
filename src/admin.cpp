@@ -81,6 +81,17 @@ std::future<std::string> HttpAdminSrv::enqueue_train_uml(const std::vector<uint8
     return f;
 }
 
+std::future<std::string> HttpAdminSrv::enqueue_list_uml() {
+    std::promise<std::string> p;
+    auto f = p.get_future();
+    JobAdmin job;
+    job.type = JobTypeAdmin::LIST_UML;
+    job.response = std::move(p);
+    { std::lock_guard<std::mutex> lock(mtx_); jobs_.push(std::move(job)); }
+    cv_.notify_one();
+    return f;
+}
+
 std::future<std::string> HttpAdminSrv::enqueue_list_tables() {
     std::promise<std::string> p;
     auto f = p.get_future();
@@ -219,6 +230,21 @@ void HttpAdminSrv::get_src_types(std::shared_ptr<asio::ip::tcp::socket> s) {
     asio::error_code ec;
     asio::write(*s, asio::buffer(resp), ec);
     if(ec) Logger::Error("HttpAdminSrv::get_src_types asio::write: {}", ec.message());
+}
+
+void HttpAdminSrv::get_list_uml(std::shared_ptr<asio::ip::tcp::socket> s) {
+    auto future = enqueue_list_uml();
+    std::string json;
+    try {
+        json = future.get();
+    } catch (const std::exception& err) {
+        Logger::Warn("HttpAdminSrv::get_list_uml {}", err.what());
+        json = "[]";
+    }
+    std::string resp = build_response("application/json", json);
+    asio::error_code ec;
+    asio::write(*s, asio::buffer(resp), ec);
+    if(ec) Logger::Error("HttpAdminSrv::get_list_uml asio::write: {}", ec.message());
 }
 
 void HttpAdminSrv::get_train_uml(std::shared_ptr<asio::ip::tcp::socket> s) {
@@ -543,6 +569,50 @@ void HttpAdminSrv::post_train_uml(std::shared_ptr<asio::ip::tcp::socket> s, int 
         payload.insert(payload.end(), (uint8_t*)&size, (uint8_t*)&size + 4);
         payload.insert(payload.end(), p.second.begin(), p.second.end());
     }
+    std::string events_json_str;
+    pos = 0;
+    while ((pos = bbody.find("name=\"events_json\"", pos)) != std::string::npos) {
+        size_t start = bbody.find("\r\n\r\n", pos);
+        if (start != std::string::npos) {
+            start += 4;
+            size_t end = bbody.find(boundary, start);
+            if (end != std::string::npos) {
+                events_json_str = bbody.substr(start, end - start);
+                while (!events_json_str.empty() && (events_json_str.back() == '\r' || events_json_str.back() == '\n')) events_json_str.pop_back();
+                break;
+            }
+        }
+        pos = start;
+    }
+    std::vector<nlohmann::json> events;
+    if (!events_json_str.empty()) {
+        try {
+            auto ev_arr = nlohmann::json::parse(events_json_str);
+            if (ev_arr.is_array()) {
+                for (auto& ev : ev_arr) events.push_back(ev);
+            }
+        } catch (...) {
+            Logger::Warn("HttpAdminSrv::post_train_uml: failed to parse events_json");
+        }
+    }
+    uint16_t event_count = htons(events.size());
+    payload.insert(payload.end(), (uint8_t*)&event_count, (uint8_t*)&event_count + 2);
+    for (auto& ev : events) {
+        std::string ev_name = ev.value("event_name", "");
+        uint32_t ev_name_len = htonl(ev_name.size());
+        payload.insert(payload.end(), (uint8_t*)&ev_name_len, (uint8_t*)&ev_name_len + 4);
+        payload.insert(payload.end(), ev_name.begin(), ev_name.end());
+        std::string tgt_uml = ev.value("target_uml", "");
+        uint32_t tgt_uml_len = htonl(tgt_uml.size());
+        payload.insert(payload.end(), (uint8_t*)&tgt_uml_len, (uint8_t*)&tgt_uml_len + 4);
+        payload.insert(payload.end(), tgt_uml.begin(), tgt_uml.end());
+        uint8_t tgt_src_type = ev.value("target_src_type", 1);
+        payload.push_back(tgt_src_type);
+        std::string tgt_src = ev.value("target_source", "");
+        uint32_t tgt_src_len = htonl(tgt_src.size());
+        payload.insert(payload.end(), (uint8_t*)&tgt_src_len, (uint8_t*)&tgt_src_len + 4);
+        payload.insert(payload.end(), tgt_src.begin(), tgt_src.end());
+    }
     auto future = enqueue_train_uml(payload);
     std::string resp = R"({"status":"accepted","message":"Train UML started"})";
     std::string http_resp = build_response("application/json", resp);
@@ -551,13 +621,17 @@ void HttpAdminSrv::post_train_uml(std::shared_ptr<asio::ip::tcp::socket> s, int 
     std::thread([future = std::move(future), s]() mutable {
         asio::error_code ec2;
         try {
-            future.get();
-            std::string resp = R"({"status":"ok","message":"Train UML finished"})";
-            asio::write(*s, asio::buffer(build_response("application/json", resp)), ec2);
+            std::string result = future.get();
+            if (result == "duplicate") {
+                std::string resp = R"({"status":"duplicate","message":"Block already exists, skipped"})";
+                asio::write(*s, asio::buffer(build_response("application/json", resp)), ec2);
+            } else {
+                std::string resp = R"({"status":"ok","message":"Train UML finished"})";
+                asio::write(*s, asio::buffer(build_response("application/json", resp)), ec2);
+            }
+            if(ec2) Logger::Warn("HttpAdminSrv::post_train_uml async write: {}", ec2.message());
         } catch (const std::exception& err) {
-            std::string resp = R"({"status":"error","message":")" + std::string(err.what()) + "\"}";
-            asio::write(*s, asio::buffer(build_response("application/json", resp)), ec2);
-            if(ec2) Logger::Error("HttpAdminSrv::post_train_uml asio::write: {}", ec2.message());
+            Logger::Warn("HttpAdminSrv::post_train_uml async: {}", err.what());
         }
     }).detach();
 }
@@ -604,6 +678,10 @@ void HttpAdminSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
             }
             else if (path == "/src_types") {
                 get_src_types(s);
+                return;
+            }
+            else if (path == "/list_uml") {
+                get_list_uml(s);
                 return;
             }
             else if (path == "/show_db") {

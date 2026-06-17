@@ -1,0 +1,20 @@
+@startuml TableRow
+class TableRow {
+    +int index
+    +Vector<Cell> cells
+    +bool selected
+    +void setIndex(int i)
+    +Cell getCell(int col)
+    +void addCell(Cell c)
+    +void removeCell(int col)
+    +void select()
+    +void deselect()
+}
+class Cell {
+    +String value
+    +String dataType
+    +String getDisplay()
+    +void setValue(String v)
+}
+TableRow o-- Cell : contains
+@enduml

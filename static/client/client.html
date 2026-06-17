@@ -4,40 +4,1330 @@
     <title>AI Knowledge Assistant</title>
     <meta charset="UTF-8">
     <style>
-        body { font-family: sans-serif; max-width: 800px; margin: auto; padding: 20px; }
+        * { box-sizing: border-box; }
+        body { font-family: sans-serif; margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; }
         #chat { border: 1px solid #ccc; height: 400px; overflow-y: auto; padding: 10px; margin-bottom: 10px; background: #f9f9f9; }
         .message { margin-bottom: 10px; }
         .user { color: blue; font-weight: bold; }
         .assistant { color: green; }
-        .feedback { margin-left: 10px; font-size: 0.8em; cursor: pointer; }
-        .feedback span { margin: 0 5px; }
-        .thumbs-up, .thumbs-down { cursor: pointer; user-select: none; }
-        .thumbs-up:hover, .thumbs-down:hover { opacity: 0.7; }
         textarea { width: 100%; padding: 8px; }
         button { padding: 8px 16px; margin-top: 5px; }
-        pre code {
-            display: block;
-            background: #f0f0f0;
-            padding: 8px;
-            border-radius: 4px;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            font-family: monospace;
-        }
+        .tabs { display: flex; gap: 0; margin-bottom: 0; background: #eee; padding: 0 10px; }
+        .tab { padding: 10px 20px; cursor: pointer; border: 1px solid #ccc; border-bottom: none; border-radius: 4px 4px 0 0; background: #ddd; margin-right: 2px; }
+        .tab.active { background: #fff; border-bottom: 1px solid #fff; }
+        .tab-content { display: none; flex: 1; overflow: hidden; }
+        .tab-content.active { display: flex; flex-direction: column; }
+        .chat-tab-content { padding: 20px; max-width: 800px; margin: 0 auto; width: 100%; }
+        #constructor-tab { display: none; flex-direction: column; height: 100vh; }
+        #constructor-tab.active { display: flex; }
+        .cad-layout { display: flex; flex: 1; overflow: hidden; }
+        .cad-palette { width: 200px; min-width: 120px; max-width: 400px; background: #f5f5f5; border-right: 1px solid #ccc; padding: 8px; overflow-y: auto; display: flex; flex-direction: column; }
+        .cad-palette h3 { margin: 0 0 8px 0; font-size: 13px; color: #555; }
+        .palette-resize { width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; }
+        .palette-resize:hover, .palette-resize.active { background: #2196F3; }
+        .accordion { margin-bottom: 6px; }
+        .accordion-header { display: flex; align-items: center; padding: 5px 8px; cursor: pointer; background: #e8e8e8; border-radius: 4px; font-size: 12px; font-weight: 600; color: #444; user-select: none; }
+        .accordion-header:hover { background: #ddd; }
+        .accordion-header .arrow { margin-right: 6px; font-size: 10px; transition: transform 0.15s; }
+        .accordion-header.open .arrow { transform: rotate(90deg); }
+        .accordion-body { display: none; padding: 4px 0; }
+        .accordion-body.open { display: block; }
+        .block-item { border: 1px solid #4CAF50; padding: 6px 10px; border-radius: 4px; cursor: grab; background: #e8f5e9; margin-bottom: 4px; font-size: 12px; user-select: none; }
+        .block-item:active { cursor: grabbing; }
+        .block-item:hover { background: #c8e6c9; }
+        .cad-canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #fff; }
+        #cadCanvas { display: block; }
+        .cad-toolbar { display: flex; gap: 6px; padding: 6px 8px; background: #f0f0f0; border-bottom: 1px solid #ccc; align-items: center; flex-wrap: wrap; }
+        .cad-toolbar button { padding: 4px 12px; font-size: 12px; margin: 0; }
+        .cad-toolbar .sep { width: 1px; height: 20px; background: #ccc; margin: 0 4px; }
+        .cad-toolbar label { font-size: 12px; color: #555; }
+        .cad-toolbar select { font-size: 12px; padding: 2px 4px; }
+        .cad-status { padding: 4px 8px; background: #f0f0f0; border-top: 1px solid #ccc; font-size: 11px; color: #666; display: flex; justify-content: space-between; }
+        .cad-result { border-top: 1px solid #ccc; background: #fafafa; max-height: 200px; overflow-y: auto; padding: 8px; font-size: 11px; }
+        .cad-result pre { margin: 0; white-space: pre-wrap; font-size: 11px; }
+        #contextMenu { position: fixed; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); z-index: 100; display: none; min-width: 160px; }
+        #contextMenu .ctx-item { padding: 6px 14px; cursor: pointer; font-size: 12px; }
+        #contextMenu .ctx-item:hover { background: #e3f2fd; }
+        #contextMenu .ctx-sep { height: 1px; background: #eee; margin: 2px 0; }
     </style>
 </head>
 <body>
-    <h2>Ask a Question</h2>
-    <div id="chat"></div>
-    <div>
-        <label>Confidence threshold:
-            <input type="range" id="thresholdSlider" min="0" max="1" step="0.0001" value="0.0001" style="width:100%">
-            <span id="thresholdValue">0.0001</span>
-        </label>
+    <div class="tabs">
+        <div class="tab" onclick="switchTab('chat')">Chat</div>
+        <div class="tab active" onclick="switchTab('constructor')">Constructor</div>
     </div>
-    <textarea id="promptInput" rows="3" placeholder="Type your question here..."></textarea><br>
-    <button id="askBtn">Ask</button>
-    <button id="clearBtn">Clear Chat</button>
+
+    <div id="chat-tab" class="tab-content">
+        <div class="chat-tab-content">
+            <h2>Ask a Question</h2>
+            <div id="chat"></div>
+            <div>
+                <label>Confidence threshold:
+                    <input type="range" id="thresholdSlider" min="0" max="1" step="0.0001" value="0.0001" style="width:100%">
+                    <span id="thresholdValue">0.0001</span>
+                </label>
+            </div>
+            <textarea id="promptInput" rows="3" placeholder="Type your question here..."></textarea><br>
+            <button id="askBtn">Ask</button>
+            <button id="clearBtn">Clear Chat</button>
+        </div>
+    </div>
+
+    <div id="constructor-tab" class="tab-content active">
+        <div class="cad-toolbar">
+            <button id="loadBlocksBtn" title="Load trained UML blocks">Load Blocks</button>
+            <div class="sep"></div>
+            <label style="font-size:12px;">Type:</label>
+            <select id="projectType" style="font-size:12px;padding:2px 4px;">
+                <option value="python">Python</option>
+                <option value="cpp">C++</option>
+            </select>
+            <button id="buildBtn" style="background:#4CAF50;color:#fff;" title="Build project from schema">Build Project</button>
+            <button id="clearCanvasBtn" title="Remove all">Clear</button>
+            <button id="undoBtn" title="Ctrl+Z">Undo</button>
+            <button id="duplicateBtn" title="Ctrl+D">Duplicate</button>
+            <div class="sep"></div>
+            <label><input type="checkbox" id="snapGrid" checked> Snap</label>
+        </div>
+        <div class="cad-layout">
+            <div class="cad-palette" id="palette">
+                <h3>Schema</h3>
+                <div id="schemaEditor" style="margin-bottom:10px;">
+                    <input type="text" id="schemaTableName" value="records" placeholder="Table name" style="width:100%;font-size:11px;padding:3px;margin-bottom:4px;">
+                    <div id="schemaColumns"></div>
+                    <div style="display:flex;gap:4px;margin-top:4px;">
+                        <input type="text" id="newColName" placeholder="column name" style="flex:1;font-size:11px;padding:3px;">
+                        <button onclick="addSchemaColumn()" style="font-size:11px;padding:3px 8px;">+</button>
+                    </div>
+                </div>
+                <h3>Blocks</h3>
+                <div id="srcTypeFilter" style="margin-bottom:6px;"></div>
+                <div id="blockList"><em style="font-size:11px;">Click Load Blocks</em></div>
+            </div>
+            <div class="palette-resize" id="paletteResize"></div>
+            <div class="cad-canvas-wrap" id="canvasWrap">
+                <canvas id="cadCanvas"></canvas>
+            </div>
+        </div>
+        <div class="cad-status">
+            <span id="cadStatusLeft">Ready</span>
+            <span id="cadStatusRight"></span>
+        </div>
+        <div class="cad-result" id="cadResult" style="display:none;">
+            <h4 style="margin:0 0 4px;">Assembled Project</h4>
+            <div id="projectUml"></div>
+            <pre><code id="projectSources"></code></pre>
+        </div>
+    </div>
+
+    <div id="contextMenu">
+        <div class="ctx-item" id="ctxDeleteConn">Delete Connection</div>
+        <div class="ctx-sep" id="ctxSep1"></div>
+        <div class="ctx-item" id="ctxDeleteBlock">Delete Block</div>
+        <div class="ctx-item" id="ctxDuplicate">Duplicate Block</div>
+        <div class="ctx-item" id="ctxAddEvent">Add Event</div>
+        <div class="ctx-item" id="ctxNest">Nest Here</div>
+        <div class="ctx-item" id="ctxUngroup">Ungroup</div>
+        <div class="ctx-sep" id="ctxSep2"></div>
+        <div class="ctx-item" id="ctxDeleteSelected">Delete Selected</div>
+        <div class="ctx-item" id="ctxDuplicateSelected">Duplicate Selected</div>
+    </div>
+
     <script src="static/client/client.js"></script>
+    <script>
+    function switchTab(name) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        document.getElementById(name + '-tab').classList.add('active');
+        document.querySelectorAll('.tab').forEach(t => {
+            if (t.textContent.toLowerCase().includes(name)) t.classList.add('active');
+        });
+        if (name === 'constructor') resizeCanvas();
+    }
+
+    const GRID = 20;
+    const BLOCK_W = 140;
+    const BLOCK_H = 50;
+    const PORT_R = 6;
+    const PORT_SNAP = 12;
+    const NEST_PAD = 30;
+    const NEST_HEADER = 24;
+    const NEST_CHILD_W = BLOCK_W;
+    const NEST_CHILD_H = BLOCK_H;
+    let allBlocks = [];
+    let canvasBlocks = [];
+    let connections = [];
+    let undoStack = [];
+    let nextId = 1;
+    let canvas, ctx;
+
+    let dragBlock = null, dragOffX = 0, dragOffY = 0;
+    let dragMultiBlocks = null, dragMultiStartX = 0, dragMultiStartY = 0, dragMultiOrigins = [];
+    let dragConn = null;
+    let hoverPort = null;
+    let selectedBlocks = [];
+    let selectedConn = null;
+    let marquee = null;
+    let ctxTarget = null;
+    let shiftHeld = false;
+    let hoverBlock = null;
+    let nestTarget = null;
+
+    function saveUndo() {
+        undoStack.push({
+            blocks: canvasBlocks.map(b => ({...b})),
+            connections: connections.map(c => ({...c})),
+            nextId
+        });
+        if (undoStack.length > 50) undoStack.shift();
+    }
+
+    function undo() {
+        if (undoStack.length === 0) return;
+        const s = undoStack.pop();
+        canvasBlocks = s.blocks;
+        connections = s.connections;
+        nextId = s.nextId;
+        selectedBlocks = [];
+        selectedConn = null;
+        setStatus('Undo');
+        draw();
+    }
+
+    function resizeCanvas() {
+        const wrap = document.getElementById('canvasWrap');
+        canvas.width = wrap.clientWidth;
+        canvas.height = wrap.clientHeight;
+        draw();
+    }
+
+    (function initPaletteResize() {
+        const handle = document.getElementById('paletteResize');
+        const palette = document.getElementById('palette');
+        let dragging = false, startX, startW;
+        handle.addEventListener('mousedown', e => {
+            dragging = true;
+            startX = e.clientX;
+            startW = palette.offsetWidth;
+            handle.classList.add('active');
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', e => {
+            if (!dragging) return;
+            const w = Math.max(120, Math.min(400, startW + e.clientX - startX));
+            palette.style.width = w + 'px';
+            resizeCanvas();
+        });
+        document.addEventListener('mouseup', () => {
+            if (dragging) { dragging = false; handle.classList.remove('active'); }
+        });
+    })();
+
+    function snap(v) { return document.getElementById('snapGrid').checked ? Math.round(v / GRID) * GRID : v; }
+    function setStatus(msg) { document.getElementById('cadStatusLeft').textContent = msg; }
+    function updateStatus() {
+        const ns = selectedBlocks.length;
+        const nb = canvasBlocks.length;
+        const nc = connections.length;
+        let s = nb + ' blocks, ' + nc + ' connections';
+        if (ns > 0) {
+            s += ' | ' + ns + ' selected';
+            if (ns === 1) {
+                const b = selectedBlocks[0];
+                const bd = allBlocks.find(bl => bl.name === b.name);
+                const evts = bd?.events || b.events || [];
+                const children = getChildren(b);
+                if (evts.length > 0) s += ' | events: ' + evts.map(e => e.event_name).join(', ');
+                if (children.length > 0) s += ' | ' + children.length + ' children';
+                if (b.parentId) s += ' | in: ' + (canvasBlocks.find(p => p.id === b.parentId)?.name || '?');
+            }
+        }
+        document.getElementById('cadStatusRight').textContent = s;
+    }
+
+    function getChildren(b) { return canvasBlocks.filter(c => c.parentId === b.id); }
+    function isParent(b) { return canvasBlocks.some(c => c.parentId === b.id); }
+    function isDescendant(block, potentialAncestor) {
+        let p = block.parentId;
+        while (p) {
+            if (p === potentialAncestor.id) return true;
+            const pb = canvasBlocks.find(b => b.id === p);
+            p = pb ? pb.parentId : null;
+        }
+        return false;
+    }
+    function getBlockBounds(b) {
+        const children = getChildren(b);
+        if (children.length === 0) return { x: b.x, y: b.y, w: BLOCK_W, h: BLOCK_H };
+        let minX = b.x, minY = b.y, maxX = b.x + BLOCK_W, maxY = b.y + BLOCK_H;
+        for (const ch of children) {
+            const cb = getBlockBounds(ch);
+            minX = Math.min(minX, cb.x);
+            minY = Math.min(minY, cb.y);
+            maxX = Math.max(maxX, cb.x + cb.w);
+            maxY = Math.max(maxY, cb.y + cb.h);
+        }
+        return { x: b.x, y: b.y, w: Math.max(BLOCK_W, maxX - b.x + NEST_PAD), h: Math.max(BLOCK_H + NEST_HEADER, maxY - b.y + NEST_PAD) };
+    }
+
+    function getPorts(b) {
+        const bb = getBlockBounds(b);
+        return {
+            out: { x: bb.x + bb.w, y: bb.y + bb.h / 2 },
+            in:  { x: bb.x, y: bb.y + bb.h / 2 }
+        };
+    }
+
+    function findNearestPort(mx, my, excludeBlock) {
+        let best = null, bestDist = PORT_SNAP;
+        for (const b of canvasBlocks) {
+            if (b === excludeBlock) continue;
+            if (b.parentId) continue;
+            const ports = getPorts(b);
+            for (const [dir, p] of Object.entries(ports)) {
+                const d = Math.hypot(mx - p.x, my - p.y);
+                if (d < bestDist) { bestDist = d; best = { block: b, dir, x: p.x, y: p.y }; }
+            }
+        }
+        return best;
+    }
+
+    function isBlockSelected(b) { return selectedBlocks.includes(b); }
+
+    function toggleBlockSelection(b) {
+        const idx = selectedBlocks.indexOf(b);
+        if (idx >= 0) selectedBlocks.splice(idx, 1);
+        else selectedBlocks.push(b);
+    }
+
+    function rectOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+        return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+    }
+
+    function drawGrid() {
+        if (!ctx) return;
+        ctx.strokeStyle = '#e0e0e0';
+        ctx.lineWidth = 0.5;
+        for (let x = 0; x < canvas.width; x += GRID) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+        }
+        for (let y = 0; y < canvas.height; y += GRID) {
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+        }
+    }
+
+    function draw() {
+        if (!ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#f9f9f9';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        drawGrid();
+        connections.forEach(c => drawConnection(c, c === selectedConn));
+        if (nestTarget) {
+            const nb = getBlockBounds(nestTarget);
+            ctx.fillStyle = 'rgba(33,150,243,0.15)';
+            ctx.strokeStyle = '#2196F3';
+            ctx.lineWidth = 3;
+            ctx.setLineDash([6, 4]);
+            roundRect(ctx, nb.x - 4, nb.y - 4, nb.w + 8, nb.h + 8, 10);
+            ctx.fill();
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = '#2196F3';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText('Drop here', nb.x + nb.w / 2, nb.y - 6);
+        }
+        const roots = canvasBlocks.filter(b => !b.parentId);
+        for (const r of roots) drawBlockTree(r);
+        if (dragConn) drawDragConnection(dragConn);
+        if (marquee) drawMarquee(marquee);
+        updateStatus();
+    }
+
+    function drawBlockTree(b) {
+        drawBlock(b, isBlockSelected(b));
+        const children = getChildren(b);
+        for (const ch of children) drawBlockTree(ch);
+    }
+
+    function drawBlock(b, sel) {
+        const bb = getBlockBounds(b);
+        const children = getChildren(b);
+        const hover = hoverPort && hoverPort.block === b;
+        const isNest = children.length > 0;
+
+        if (isNest) {
+            ctx.fillStyle = sel ? 'rgba(187,222,251,0.3)' : (hover ? 'rgba(241,248,233,0.3)' : 'rgba(232,245,233,0.15)');
+            ctx.strokeStyle = sel ? '#1565c0' : '#81C784';
+            ctx.lineWidth = sel ? 2 : 1;
+            ctx.setLineDash([]);
+            roundRect(ctx, bb.x, bb.y, bb.w, bb.h, 8);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = sel ? '#e3f2fd' : '#e8f5e9';
+            roundRect(ctx, bb.x, bb.y, bb.w, NEST_HEADER, 8);
+            ctx.fill();
+            ctx.fillStyle = sel ? '#1565c0' : '#388E3C';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            const lbl = b.name.length > 16 ? b.name.slice(0, 15) + '\u2026' : b.name;
+            ctx.fillText(lbl, bb.x + 8, bb.y + NEST_HEADER / 2);
+            const cnt = children.length;
+            ctx.fillStyle = '#888';
+            ctx.font = '10px sans-serif';
+            ctx.textAlign = 'right';
+            ctx.fillText(cnt + (cnt === 1 ? ' child' : ' children'), bb.x + bb.w - 8, bb.y + NEST_HEADER / 2);
+        } else {
+            ctx.fillStyle = sel ? '#bbdefb' : (hover ? '#f1f8e9' : '#e8f5e9');
+            ctx.strokeStyle = sel ? '#1565c0' : '#4CAF50';
+            ctx.lineWidth = sel ? 2 : 1;
+            ctx.setLineDash([]);
+            roundRect(ctx, bb.x, bb.y, bb.w, bb.h, 6);
+            ctx.fill();
+            ctx.stroke();
+        }
+
+        if (sel) {
+            ctx.strokeStyle = '#1565c0';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            roundRect(ctx, bb.x - 3, bb.y - 3, bb.w + 6, bb.h + 6, 8);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        if (!isNest) {
+            ctx.fillStyle = '#333';
+            ctx.font = '12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const label = b.name.length > 14 ? b.name.slice(0, 13) + '\u2026' : b.name;
+            ctx.fillText(label, bb.x + bb.w / 2, bb.y + bb.h / 2);
+        }
+
+        const inConn = connections.filter(c => c.to === b.id).length;
+        const outConn = connections.filter(c => c.from === b.id).length;
+        const pIn = getPorts(b).in;
+        const pOut = getPorts(b).out;
+        const inHover = hoverPort && hoverPort.block === b && hoverPort.dir === 'in';
+        const outHover = hoverPort && hoverPort.block === b && hoverPort.dir === 'out';
+        const dragTarget = dragConn && dragConn.targetBlock === b;
+
+        ctx.fillStyle = inHover || (dragConn && dragTarget && dragConn.fromDir === 'out') ? '#1565c0' : '#2196F3';
+        ctx.beginPath(); ctx.arc(pIn.x, pIn.y, PORT_R, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+
+        ctx.fillStyle = outHover || (dragConn && dragTarget && dragConn.fromDir === 'in') ? '#b71c1c' : '#f44336';
+        ctx.beginPath(); ctx.arc(pOut.x, pOut.y, PORT_R, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+
+        if (inConn > 0) {
+            ctx.fillStyle = '#2196F3'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText(inConn, pIn.x, pIn.y - PORT_R - 5);
+        }
+        if (outConn > 0) {
+            ctx.fillStyle = '#f44336'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText(outConn, pOut.x, pOut.y - PORT_R - 5);
+        }
+        const bd = allBlocks.find(bl => bl.name === b.name);
+        const evts = bd?.events || b.events || [];
+        if (evts.length > 0) {
+            ctx.fillStyle = '#ff9800'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'right';
+            ctx.fillText(evts.length + ' evt', bb.x + bb.w - 4, bb.y + (isNest ? NEST_HEADER + 12 : 10));
+        }
+    }
+
+    function drawConnection(c, sel) {
+        const from = canvasBlocks.find(b => b.id === c.from);
+        const to = canvasBlocks.find(b => b.id === c.to);
+        if (!from || !to) return;
+        const pOut = getPorts(from).out;
+        const pIn = getPorts(to).in;
+        const x1 = pOut.x, y1 = pOut.y;
+        const x2 = pIn.x, y2 = pIn.y;
+        const dx = Math.abs(x2 - x1);
+        const cp = Math.max(dx * 0.5, 40);
+
+        ctx.strokeStyle = sel ? '#1565c0' : '#666';
+        ctx.lineWidth = sel ? 3 : 2;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.bezierCurveTo(x1 + cp, y1, x2 - cp, y2, x2, y2);
+        ctx.stroke();
+
+        const angle = Math.atan2(y2 - (y2 - (y2 - y1) * 0.01), x2 - (x2 - cp));
+        ctx.fillStyle = sel ? '#1565c0' : '#666';
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - 10 * Math.cos(angle - 0.35), y2 - 10 * Math.sin(angle - 0.35));
+        ctx.lineTo(x2 - 10 * Math.cos(angle + 0.35), y2 - 10 * Math.sin(angle + 0.35));
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    function drawDragConnection(d) {
+        const x1 = d.x1, y1 = d.y1;
+        const x2 = d.x2, y2 = d.y2;
+        const dx = Math.abs(x2 - x1);
+        const cp = Math.max(dx * 0.4, 30);
+
+        ctx.strokeStyle = '#999';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.bezierCurveTo(x1 + cp, y1, x2 - cp, y2, x2, y2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        if (d.targetPort) {
+            ctx.strokeStyle = '#4CAF50';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(d.targetPort.x, d.targetPort.y, PORT_R + 4, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+
+    function drawMarquee(m) {
+        const x = Math.min(m.x1, m.x2);
+        const y = Math.min(m.y1, m.y2);
+        const w = Math.abs(m.x2 - m.x1);
+        const h = Math.abs(m.y2 - m.y1);
+        ctx.fillStyle = 'rgba(33, 150, 243, 0.08)';
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = '#2196F3';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(x, y, w, h);
+        ctx.setLineDash([]);
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+    }
+
+    function blockAt(x, y) {
+        for (let i = canvasBlocks.length - 1; i >= 0; i--) {
+            const b = canvasBlocks[i];
+            const bb = getBlockBounds(b);
+            if (x >= bb.x && x <= bb.x + bb.w && y >= bb.y && y <= bb.y + bb.h) return b;
+        }
+        return null;
+    }
+
+    function hitPort(b, x, y) {
+        const ports = getPorts(b);
+        for (const [dir, p] of Object.entries(ports)) {
+            if (Math.hypot(x - p.x, y - p.y) < PORT_R + 4) return dir;
+        }
+        return null;
+    }
+
+    function connAtPoint(mx, my) {
+        for (let i = connections.length - 1; i >= 0; i--) {
+            const c = connections[i];
+            const from = canvasBlocks.find(b => b.id === c.from);
+            const to = canvasBlocks.find(b => b.id === c.to);
+            if (!from || !to) continue;
+            const pOut = getPorts(from).out;
+            const pIn = getPorts(to).in;
+            for (let t = 0; t <= 1; t += 1 / 30) {
+                const x = bezierPoint(pOut.x, pOut.x + Math.abs(pIn.x - pOut.x) * 0.5, pIn.x - Math.abs(pIn.x - pOut.x) * 0.5, pIn.x, t);
+                const y = bezierPoint(pOut.y, pOut.y, pIn.y, pIn.y, t);
+                if (Math.hypot(mx - x, my - y) < 6) return c;
+            }
+        }
+        return null;
+    }
+
+    function bezierPoint(p0, p1, p2, p3, t) {
+        const u = 1 - t;
+        return u*u*u*p0 + 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t*p3;
+    }
+
+    function deleteBlocks(blocks) {
+        const ids = new Set(blocks.map(b => b.id));
+        canvasBlocks = canvasBlocks.filter(b => !ids.has(b.id));
+        for (const b of blocks) {
+            for (const ch of canvasBlocks) {
+                if (ch.parentId === b.id) ch.parentId = null;
+            }
+        }
+        connections = connections.filter(c => !ids.has(c.from) && !ids.has(c.to));
+        selectedBlocks = selectedBlocks.filter(b => !ids.has(b.id));
+    }
+
+    function duplicateBlocks(blocks) {
+        const newBlocks = [];
+        const idMap = {};
+        for (const b of blocks) {
+            const nb = { id: nextId++, name: b.name, x: b.x + GRID * 3, y: b.y + GRID * 3, parentId: null };
+            idMap[b.id] = nb.id;
+            newBlocks.push(nb);
+            canvasBlocks.push(nb);
+        }
+        for (const c of connections) {
+            if (idMap[c.from] !== undefined || idMap[c.to] !== undefined) {
+                const from = idMap[c.from] || c.from;
+                const to = idMap[c.to] || c.to;
+                if (from !== to && !connections.some(cc => cc.from === from && cc.to === to)) {
+                    connections.push({ from, to });
+                }
+            }
+        }
+        return newBlocks;
+    }
+
+    function layoutChildren(parent) {
+        const children = getChildren(parent);
+        if (children.length === 0) return;
+        const cols = Math.ceil(Math.sqrt(children.length));
+        const startX = parent.x + NEST_PAD;
+        const startY = parent.y + NEST_HEADER + NEST_PAD / 2;
+        children.forEach((ch, i) => {
+            const col = i % cols;
+            const row = Math.floor(i / cols);
+            ch.x = snap(startX + col * (NEST_CHILD_W + 12));
+            ch.y = snap(startY + row * (NEST_CHILD_H + 12));
+        });
+    }
+
+    function nestBlock(child, parent) {
+        if (child.id === parent.id) return false;
+        if (child.parentId === parent.id) return false;
+        let p = parent;
+        while (p) {
+            if (p.id === child.id) return false;
+            p = canvasBlocks.find(b => b.id === p.parentId);
+        }
+        child.parentId = parent.id;
+        layoutChildren(parent);
+        return true;
+    }
+
+    function ungroupBlock(b) {
+        if (!b.parentId) return;
+        b.parentId = null;
+    }
+
+    let schemaColumns = ["name", "value"];
+
+    function renderSchemaColumns() {
+        const div = document.getElementById('schemaColumns');
+        div.innerHTML = schemaColumns.map((c, i) =>
+            '<div style="display:flex;gap:4px;margin-bottom:2px;">' +
+            '<span style="flex:1;font-size:11px;padding:3px;background:#f5f5f5;border-radius:3px;">' + c + '</span>' +
+            '<button onclick="removeSchemaColumn(' + i + ')" style="font-size:10px;padding:2px 6px;background:#f44336;color:#fff;border:none;border-radius:3px;cursor:pointer;">x</button>' +
+            '</div>'
+        ).join('');
+    }
+
+    function addSchemaColumn() {
+        const input = document.getElementById('newColName');
+        const name = input.value.trim().replace(/[^a-zA-Z0-9_]/g, '');
+        if (!name || schemaColumns.includes(name)) return;
+        schemaColumns.push(name);
+        input.value = '';
+        renderSchemaColumns();
+    }
+
+    function removeSchemaColumn(idx) {
+        schemaColumns.splice(idx, 1);
+        renderSchemaColumns();
+    }
+
+    document.getElementById('newColName').addEventListener('keydown', e => {
+        if (e.key === 'Enter') addSchemaColumn();
+    });
+
+    renderSchemaColumns();
+
+    function loadBlocks() {
+        const div = document.getElementById('blockList');
+        const filterDiv = document.getElementById('srcTypeFilter');
+        div.innerHTML = '<em>Loading...</em>';
+        fetch('/list_uml').then(r => r.json()).then(data => {
+            allBlocks = data;
+            if (allBlocks.length === 0) { div.innerHTML = '<em style="font-size:11px;">No blocks found.</em>'; filterDiv.innerHTML = ''; return; }
+            const types = new Set();
+            allBlocks.forEach(b => (b.sources || []).forEach(s => types.add(s.type)));
+            const typeArr = [...types].sort();
+            if (typeArr.length > 1) {
+                filterDiv.innerHTML = '<select id="srcTypeSelect" style="width:100%;font-size:11px;padding:3px;">' +
+                    '<option value="all">All types</option>' +
+                    typeArr.map(t => '<option value="' + t + '">' + t + '</option>').join('') +
+                    '</select>';
+                document.getElementById('srcTypeSelect').addEventListener('change', () => renderBlockList());
+            } else {
+                filterDiv.innerHTML = '';
+            }
+            renderBlockList();
+        }).catch(e => { div.innerHTML = '<em style="color:red;font-size:11px;">Error: ' + e.message + '</em>'; console.error('loadBlocks error:', e); });
+    }
+
+    function renderBlockList() {
+        const div = document.getElementById('blockList');
+        const sel = document.getElementById('srcTypeSelect');
+        const typeFilter = sel ? sel.value : 'all';
+        const filtered = typeFilter === 'all' ? allBlocks : allBlocks.filter(b => (b.sources || []).some(s => s.type === typeFilter));
+
+        const groups = {};
+        const groupOrder = ['tables', 'buttons', 'menus', 'search', 'titles', 'other'];
+        const groupLabels = { tables: 'Tables', buttons: 'Buttons', menus: 'Menus', search: 'Search', titles: 'Titles', other: 'Other' };
+
+        filtered.forEach(b => {
+            const n = b.name.toLowerCase();
+            let g = 'other';
+            if (n.includes('table') || n.includes('row') || n.includes('column') || n.includes('cell') || n.includes('data')) g = 'tables';
+            else if (n.includes('button') || n.includes('btn') || n.includes('add') || n.includes('edit') || n.includes('delete') || n.includes('remove')) g = 'buttons';
+            else if (n.includes('menu') || n.includes('context') || n.includes('item')) g = 'menus';
+            else if (n.includes('search') || n.includes('filter') || n.includes('find')) g = 'search';
+            else if (n.includes('title') || n.includes('header') || n.includes('label')) g = 'titles';
+            if (!groups[g]) groups[g] = [];
+            groups[g].push(b);
+        });
+
+        let html = '';
+        for (const g of groupOrder) {
+            if (!groups[g] || groups[g].length === 0) continue;
+            const items = groups[g].map(b =>
+                '<div class="block-item" draggable="true" data-name="' + b.name + '">' + b.name + '</div>'
+            ).join('');
+            html += '<div class="accordion">' +
+                '<div class="accordion-header open" onclick="toggleAccordion(this)">' +
+                '<span class="arrow">&#9654;</span>' + groupLabels[g] + ' (' + groups[g].length + ')' +
+                '</div>' +
+                '<div class="accordion-body open">' + items + '</div>' +
+                '</div>';
+        }
+        div.innerHTML = html || '<em style="font-size:11px;">No blocks found.</em>';
+
+        div.querySelectorAll('.block-item').forEach(el => {
+            el.addEventListener('dragstart', e => {
+                e.dataTransfer.setData('text/plain', el.dataset.name);
+            });
+        });
+    }
+
+    function toggleAccordion(header) {
+        header.classList.toggle('open');
+        header.nextElementSibling.classList.toggle('open');
+    }
+
+    canvas = document.getElementById('cadCanvas');
+    ctx = canvas.getContext('2d');
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    canvas.addEventListener('dragover', e => {
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const hit = blockAt(mx, my);
+        if (hit !== nestTarget) {
+            nestTarget = hit;
+            draw();
+        }
+    });
+    canvas.addEventListener('dragleave', () => {
+        if (nestTarget) { nestTarget = null; draw(); }
+    });
+    canvas.addEventListener('drop', e => {
+        e.preventDefault();
+        const name = e.dataTransfer.getData('text/plain');
+        if (!name) return;
+        saveUndo();
+        const rect = canvas.getBoundingClientRect();
+        const x = snap(e.clientX - rect.left - BLOCK_W / 2);
+        const y = snap(e.clientY - rect.top - BLOCK_H / 2);
+        const existing = blockAt(x + BLOCK_W / 2, y + BLOCK_H / 2);
+        const newBlock = { id: nextId++, name, x, y, parentId: null };
+        canvasBlocks.push(newBlock);
+        if (existing && existing.id !== newBlock.id) {
+            nestBlock(newBlock, existing);
+            setStatus('Added: ' + name + ' into ' + existing.name);
+        } else {
+            setStatus('Added: ' + name);
+        }
+        nestTarget = null;
+        draw();
+    });
+
+    canvas.addEventListener('mousedown', e => {
+        hideCtxMenu();
+        if (e.button === 2) return;
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        shiftHeld = e.shiftKey;
+
+        const b = blockAt(mx, my);
+        if (b) {
+            const port = hitPort(b, mx, my);
+            if (port) {
+                saveUndo();
+                const p = getPorts(b)[port];
+                dragConn = {
+                    fromBlock: b,
+                    fromDir: port,
+                    x1: p.x, y1: p.y,
+                    x2: mx, y2: my,
+                    targetBlock: null, targetPort: null
+                };
+                canvas.style.cursor = 'crosshair';
+                setStatus('Connecting from ' + b.name + ' (' + port + ')...');
+                return;
+            }
+
+            if (shiftHeld) {
+                toggleBlockSelection(b);
+                selectedConn = null;
+                draw();
+            } else if (isBlockSelected(b)) {
+                saveUndo();
+                selectedConn = null;
+                dragMultiBlocks = true;
+                dragMultiStartX = mx;
+                dragMultiStartY = my;
+                dragMultiOrigins = selectedBlocks.map(bl => ({ block: bl, ox: bl.x, oy: bl.y }));
+                canvas.style.cursor = 'grabbing';
+            } else {
+                selectedBlocks = [b];
+                selectedConn = null;
+                dragBlock = b;
+                dragOffX = mx - b.x;
+                dragOffY = my - b.y;
+                canvas.style.cursor = 'grabbing';
+            }
+            draw();
+        } else {
+            const conn = connAtPoint(mx, my);
+            if (conn) {
+                selectedConn = conn;
+                selectedBlocks = [];
+                draw();
+                return;
+            }
+            if (!shiftHeld) {
+                selectedBlocks = [];
+            }
+            selectedConn = null;
+            marquee = { x1: mx, y1: my, x2: mx, y2: my };
+            draw();
+        }
+    });
+
+    canvas.addEventListener('mousemove', onCanvasMouseMove);
+    canvas.addEventListener('mouseup', onCanvasMouseUp);
+    document.addEventListener('mousemove', onCanvasMouseMove);
+    document.addEventListener('mouseup', onCanvasMouseUp);
+
+    function onCanvasMouseMove(e) {
+        if (!dragBlock && !dragMultiBlocks && !dragConn && !marquee) {
+            if (e.target !== canvas) return;
+        }
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+
+        if (dragBlock) {
+            const dx = snap(mx - dragOffX) - dragBlock.x;
+            const dy = snap(my - dragOffY) - dragBlock.y;
+            dragBlock.x += dx;
+            dragBlock.y += dy;
+            for (const ch of getChildren(dragBlock)) {
+                ch.x += dx;
+                ch.y += dy;
+            }
+            nestTarget = null;
+            const hit = blockAt(mx, my);
+            if (hit && hit.id !== dragBlock.id && !isDescendant(hit, dragBlock)) {
+                nestTarget = hit;
+            }
+            draw();
+            return;
+        }
+
+        if (dragMultiBlocks) {
+            const dx = mx - dragMultiStartX;
+            const dy = my - dragMultiStartY;
+            for (const o of dragMultiOrigins) {
+                const ndx = snap(o.ox + dx) - o.block.x;
+                const ndy = snap(o.oy + dy) - o.block.y;
+                o.block.x += ndx;
+                o.block.y += ndy;
+                for (const ch of getChildren(o.block)) {
+                    ch.x += ndx;
+                    ch.y += ndy;
+                }
+            }
+            nestTarget = null;
+            const hit = blockAt(mx, my);
+            if (hit) {
+                const draggingIds = new Set(dragMultiOrigins.map(o => o.block.id));
+                if (!draggingIds.has(hit.id)) {
+                    const allNested = dragMultiOrigins.every(o => {
+                        const r = o.block;
+                        return r.id === hit.id || isDescendant(r, hit) || isDescendant(hit, r);
+                    });
+                    if (!allNested) nestTarget = hit;
+                }
+            }
+            draw();
+            return;
+        }
+
+        if (dragConn) {
+            dragConn.x2 = mx;
+            dragConn.y2 = my;
+            dragConn.targetBlock = null;
+            dragConn.targetPort = null;
+            const needDir = dragConn.fromDir === 'out' ? 'in' : 'out';
+            const near = findNearestPort(mx, my, dragConn.fromBlock);
+            if (near && near.dir === needDir) {
+                dragConn.targetBlock = near.block;
+                dragConn.targetPort = near;
+                dragConn.x2 = near.x;
+                dragConn.y2 = near.y;
+            }
+            draw();
+            return;
+        }
+
+        if (marquee) {
+            marquee.x2 = mx;
+            marquee.y2 = my;
+            draw();
+            return;
+        }
+
+        const b = blockAt(mx, my);
+        hoverBlock = b;
+        if (b) {
+            const port = hitPort(b, mx, my);
+            hoverPort = port ? { block: b, dir: port } : null;
+            canvas.style.cursor = port ? 'pointer' : (isBlockSelected(b) ? 'grab' : 'grab');
+        } else {
+            hoverPort = null;
+            const nearPort = findNearestPort(mx, my);
+            canvas.style.cursor = nearPort ? 'pointer' : 'crosshair';
+        }
+        draw();
+    }
+
+    function onCanvasMouseUp(e) {
+        if (dragBlock) {
+            if (nestTarget) {
+                saveUndo();
+                nestBlock(dragBlock, nestTarget);
+                setStatus('Nested ' + dragBlock.name + ' into ' + nestTarget.name);
+            }
+            nestTarget = null;
+            dragBlock = null;
+            canvas.style.cursor = 'crosshair';
+            draw();
+            return;
+        }
+
+        if (dragMultiBlocks) {
+            if (nestTarget) {
+                saveUndo();
+                let nested = 0;
+                for (const o of dragMultiOrigins) {
+                    if (o.block.id !== nestTarget.id && !isDescendant(o.block, nestTarget)) {
+                        nestBlock(o.block, nestTarget);
+                        nested++;
+                    }
+                }
+                setStatus('Nested ' + nested + ' blocks into ' + nestTarget.name);
+            }
+            nestTarget = null;
+            dragMultiBlocks = null;
+            canvas.style.cursor = 'crosshair';
+            draw();
+            return;
+        }
+
+        if (dragConn) {
+            if (dragConn.targetBlock) {
+                const fromId = dragConn.fromDir === 'out' ? dragConn.fromBlock.id : dragConn.targetBlock.id;
+                const toId = dragConn.fromDir === 'out' ? dragConn.targetBlock.id : dragConn.fromBlock.id;
+                const exists = connections.some(c => c.from === fromId && c.to === toId);
+                if (!exists && fromId !== toId) {
+                    connections.push({ from: fromId, to: toId });
+                    const fromName = canvasBlocks.find(b => b.id === fromId)?.name;
+                    const toName = canvasBlocks.find(b => b.id === toId)?.name;
+                    setStatus('Connected: ' + fromName + ' \u2192 ' + toName);
+                }
+            }
+            dragConn = null;
+            draw();
+            return;
+        }
+
+        if (marquee) {
+            const rx = Math.min(marquee.x1, marquee.x2);
+            const ry = Math.min(marquee.y1, marquee.y2);
+            const rw = Math.abs(marquee.x2 - marquee.x1);
+            const rh = Math.abs(marquee.y2 - marquee.y1);
+            if (rw > 2 || rh > 2) {
+                if (!shiftHeld) selectedBlocks = [];
+                for (const b of canvasBlocks) {
+                    const bb = getBlockBounds(b);
+                    if (rectOverlap(rx, ry, rw, rh, bb.x, bb.y, bb.w, bb.h)) {
+                        if (!isBlockSelected(b)) selectedBlocks.push(b);
+                    }
+                }
+                if (selectedBlocks.length > 0) setStatus('Selected ' + selectedBlocks.length + ' blocks');
+            }
+            marquee = null;
+            draw();
+        }
+    }
+
+    canvas.addEventListener('contextmenu', e => {
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const conn = connAtPoint(mx, my);
+        const b = blockAt(mx, my);
+        const menu = document.getElementById('contextMenu');
+
+        if (conn) {
+            ctxTarget = { type: 'conn', conn };
+            const from = canvasBlocks.find(bl => bl.id === conn.from);
+            const to = canvasBlocks.find(bl => bl.id === conn.to);
+            menu.querySelector('#ctxDeleteConn').textContent = 'Delete: ' + (from?.name||'?') + ' \u2192 ' + (to?.name||'?');
+            menu.querySelector('#ctxDeleteConn').style.display = 'block';
+            menu.querySelector('#ctxSep1').style.display = 'none';
+            menu.querySelector('#ctxDeleteBlock').style.display = 'none';
+            menu.querySelector('#ctxDuplicate').style.display = 'none';
+            menu.querySelector('#ctxAddEvent').style.display = 'none';
+            menu.querySelector('#ctxNest').style.display = 'none';
+            menu.querySelector('#ctxUngroup').style.display = 'none';
+            menu.querySelector('#ctxSep2').style.display = 'none';
+            menu.querySelector('#ctxDeleteSelected').style.display = 'none';
+            menu.querySelector('#ctxDuplicateSelected').style.display = 'none';
+        } else if (b) {
+            if (!isBlockSelected(b)) { selectedBlocks = [b]; selectedConn = null; draw(); }
+            const multi = selectedBlocks.length > 1;
+            ctxTarget = { type: 'block', block: b };
+            menu.querySelector('#ctxDeleteConn').style.display = 'none';
+            menu.querySelector('#ctxSep1').style.display = multi ? 'block' : 'none';
+            menu.querySelector('#ctxDeleteBlock').style.display = multi ? 'none' : 'block';
+            menu.querySelector('#ctxDuplicate').style.display = multi ? 'none' : 'block';
+            menu.querySelector('#ctxAddEvent').style.display = multi ? 'none' : 'block';
+            menu.querySelector('#ctxNest').style.display = multi ? 'none' : (b.parentId ? 'none' : 'block');
+            menu.querySelector('#ctxUngroup').style.display = multi ? 'none' : (b.parentId ? 'block' : 'none');
+            menu.querySelector('#ctxSep2').style.display = multi ? 'block' : 'none';
+            menu.querySelector('#ctxDeleteSelected').style.display = multi ? 'block' : 'none';
+            menu.querySelector('#ctxDuplicateSelected').style.display = multi ? 'block' : 'none';
+            menu.querySelector('#ctxDeleteSelected').textContent = 'Delete ' + selectedBlocks.length + ' blocks';
+            menu.querySelector('#ctxDuplicateSelected').textContent = 'Duplicate ' + selectedBlocks.length + ' blocks';
+        } else {
+            return;
+        }
+        menu.style.left = e.clientX + 'px';
+        menu.style.top = e.clientY + 'px';
+        menu.style.display = 'block';
+    });
+
+    function hideCtxMenu() {
+        document.getElementById('contextMenu').style.display = 'none';
+        ctxTarget = null;
+    }
+
+    document.addEventListener('click', e => {
+        if (!e.target.closest('#contextMenu')) hideCtxMenu();
+    });
+
+    document.getElementById('ctxDeleteConn').addEventListener('click', () => {
+        if (ctxTarget?.type === 'conn') {
+            saveUndo();
+            connections = connections.filter(c => c !== ctxTarget.conn);
+            selectedConn = null;
+            setStatus('Connection deleted');
+            draw();
+        }
+        hideCtxMenu();
+    });
+
+    document.getElementById('ctxDeleteBlock').addEventListener('click', () => {
+        if (ctxTarget?.type === 'block') {
+            saveUndo();
+            deleteBlocks([ctxTarget.block]);
+            setStatus('Deleted: ' + ctxTarget.block.name);
+            draw();
+        }
+        hideCtxMenu();
+    });
+
+    document.getElementById('ctxDuplicate').addEventListener('click', () => {
+        if (ctxTarget?.type === 'block') {
+            saveUndo();
+            const nb = duplicateBlocks([ctxTarget.block]);
+            setStatus('Duplicated: ' + ctxTarget.block.name);
+            draw();
+        }
+        hideCtxMenu();
+    });
+
+    document.getElementById('ctxAddEvent').addEventListener('click', () => {
+        if (ctxTarget?.type === 'block') {
+            const block = ctxTarget.block;
+            const blockData = allBlocks.find(b => b.name === block.name);
+            const existingEvents = blockData?.events || [];
+            const targetOptions = allBlocks.filter(b => b.name !== block.name).map(b => b.name);
+            if (targetOptions.length === 0) {
+                alert('No other trained blocks available as event targets.');
+                hideCtxMenu();
+                return;
+            }
+            const eventName = prompt('Event name (e.g. onClick, onInput):');
+            if (!eventName) { hideCtxMenu(); return; }
+            const targetName = prompt('Target UML block:\n' + targetOptions.join('\n'));
+            if (!targetName || !targetOptions.includes(targetName)) {
+                alert('Invalid target block name.');
+                hideCtxMenu();
+                return;
+            }
+            const targetBlock = allBlocks.find(b => b.name === targetName);
+            let targetSource = '';
+            let targetSrcType = 1;
+            if (targetBlock && targetBlock.sources && targetBlock.sources.length > 0) {
+                targetSource = targetBlock.sources[0].content;
+                targetSrcType = 1;
+            }
+            if (!block.events) block.events = [];
+            block.events.push({
+                event_name: eventName,
+                target_uml: targetName,
+                target_src_type: targetSrcType,
+                target_source: targetSource
+            });
+            setStatus('Added event: ' + eventName + ' -> ' + targetName);
+            draw();
+        }
+        hideCtxMenu();
+    });
+
+    document.getElementById('ctxNest').addEventListener('click', () => {
+        if (ctxTarget?.type === 'block') {
+            const child = ctxTarget.block;
+            const targetName = prompt('Nest into which block?\n' +
+                canvasBlocks.filter(b => b.id !== child.id && !b.parentId && !isChildOf(b, child))
+                    .map(b => b.name).join('\n'));
+            if (!targetName) { hideCtxMenu(); return; }
+            const parent = canvasBlocks.find(b => b.name === targetName && b.id !== child.id && !b.parentId);
+            if (!parent) { alert('Block not found or cannot nest.'); hideCtxMenu(); return; }
+            saveUndo();
+            if (nestBlock(child, parent)) {
+                setStatus('Nested: ' + child.name + ' -> ' + parent.name);
+            } else {
+                setStatus('Cannot nest (would create cycle)');
+            }
+            draw();
+        }
+        hideCtxMenu();
+    });
+
+    function isChildOf(block, potentialParent) {
+        let p = block.parentId;
+        while (p) {
+            if (p === potentialParent.id) return true;
+            const pb = canvasBlocks.find(b => b.id === p);
+            p = pb ? pb.parentId : null;
+        }
+        return false;
+    }
+
+    document.getElementById('ctxUngroup').addEventListener('click', () => {
+        if (ctxTarget?.type === 'block') {
+            saveUndo();
+            ungroupBlock(ctxTarget.block);
+            setStatus('Ungrouped: ' + ctxTarget.block.name);
+            draw();
+        }
+        hideCtxMenu();
+    });
+
+    document.getElementById('ctxDeleteSelected').addEventListener('click', () => {
+        if (selectedBlocks.length > 0) {
+            saveUndo();
+            const count = selectedBlocks.length;
+            deleteBlocks(selectedBlocks);
+            setStatus('Deleted ' + count + ' blocks');
+            draw();
+        }
+        hideCtxMenu();
+    });
+
+    document.getElementById('ctxDuplicateSelected').addEventListener('click', () => {
+        if (selectedBlocks.length > 0) {
+            saveUndo();
+            const nb = duplicateBlocks(selectedBlocks);
+            selectedBlocks = nb;
+            setStatus('Duplicated ' + nb.length + ' blocks');
+            draw();
+        }
+        hideCtxMenu();
+    });
+
+    document.addEventListener('keydown', e => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        shiftHeld = e.shiftKey;
+
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (selectedBlocks.length > 0) {
+                saveUndo();
+                const count = selectedBlocks.length;
+                deleteBlocks(selectedBlocks);
+                setStatus('Deleted ' + count + ' blocks');
+                draw();
+            } else if (selectedConn) {
+                saveUndo();
+                connections = connections.filter(c => c !== selectedConn);
+                setStatus('Connection deleted');
+                selectedConn = null;
+                draw();
+            }
+        }
+        if (e.key === 'Escape') {
+            dragConn = null;
+            dragBlock = null;
+            dragMultiBlocks = null;
+            marquee = null;
+            selectedBlocks = [];
+            selectedConn = null;
+            hoverPort = null;
+            draw();
+        }
+        if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
+        if (e.ctrlKey && e.key === 'd') { e.preventDefault(); duplicateSelected(); }
+        if (e.ctrlKey && e.key === 'a') {
+            e.preventDefault();
+            selectedBlocks = [...canvasBlocks];
+            setStatus('Selected all ' + selectedBlocks.length + ' blocks');
+            draw();
+        }
+    });
+
+    document.addEventListener('keyup', e => { shiftHeld = e.shiftKey; });
+
+    function duplicateSelected() {
+        if (selectedBlocks.length === 0) return;
+        saveUndo();
+        const nb = duplicateBlocks(selectedBlocks);
+        selectedBlocks = nb;
+        setStatus('Duplicated ' + nb.length + ' blocks');
+        draw();
+    }
+
+    document.getElementById('undoBtn').addEventListener('click', undo);
+    document.getElementById('duplicateBtn').addEventListener('click', duplicateSelected);
+
+    document.getElementById('clearCanvasBtn').addEventListener('click', () => {
+        if (canvasBlocks.length === 0 && connections.length === 0) return;
+        saveUndo();
+        canvasBlocks = [];
+        connections = [];
+        selectedBlocks = [];
+        selectedConn = null;
+        dragConn = null;
+        setStatus('Canvas cleared');
+        draw();
+    });
+
+    document.getElementById('buildBtn').addEventListener('click', async () => {
+        if (canvasBlocks.length === 0) { setStatus('No blocks on canvas'); return; }
+        const roots = canvasBlocks.filter(b => !b.parentId);
+        const blockTree = roots.map(b => buildTree(b));
+        const projectName = prompt('Project name:', 'my_project') || 'my_project';
+        const tableName = document.getElementById('schemaTableName').value.trim() || 'records';
+        const projectType = document.getElementById('projectType').value;
+        if (schemaColumns.length === 0) { setStatus('Add columns to schema first'); return; }
+        setStatus('Building project...');
+        document.getElementById('cadResult').style.display = 'block';
+        document.getElementById('projectSources').textContent = 'Building...';
+        document.getElementById('projectUml').innerHTML = '';
+        try {
+            const resp = await fetch('/build_project', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    blocks: blockTree,
+                    project_name: projectName,
+                    table_name: tableName,
+                    columns: schemaColumns,
+                    project_type: projectType
+                })
+            });
+            const data = await resp.json();
+            if (data.error) {
+                document.getElementById('projectSources').textContent = 'Error: ' + data.error;
+                setStatus('Build failed');
+                return;
+            }
+            document.getElementById('projectUml').innerHTML = '<strong>Project created:</strong> ' + data.project_dir;
+            document.getElementById('projectSources').textContent = 'Files:\n' + (data.files || []).join('\n');
+            setStatus('Built: ' + canvasBlocks.length + ' blocks -> ' + data.project_dir);
+        } catch (e) {
+            document.getElementById('projectSources').textContent = 'Error: ' + e.message;
+            setStatus('Build failed');
+        }
+    });
+
+    function buildTree(b) {
+        const children = getChildren(b);
+        const node = { name: b.name };
+        if (children.length > 0) {
+            node.children = children.map(ch => buildTree(ch));
+        }
+        return node;
+    }
+
+    canvas.addEventListener('dblclick', e => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const b = blockAt(mx, my);
+        if (b) {
+            saveUndo();
+            deleteBlocks([b]);
+            setStatus('Deleted: ' + b.name);
+            draw();
+        } else {
+            const conn = connAtPoint(mx, my);
+            if (conn) {
+                saveUndo();
+                connections = connections.filter(c => c !== conn);
+                selectedConn = null;
+                setStatus('Connection deleted');
+                draw();
+            }
+        }
+    });
+
+    document.getElementById('loadBlocksBtn').addEventListener('click', loadBlocks);
+
+    loadBlocks();
+    setTimeout(() => resizeCanvas(), 50);
+    </script>
 </body>
 </html>

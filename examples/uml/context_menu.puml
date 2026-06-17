@@ -1,0 +1,23 @@
+@startuml ContextMenu
+class ContextMenu {
+    +int x
+    +int y
+    +bool visible
+    +Vector<MenuItem> items
+    +void show(int px, int py)
+    +void hide()
+    +void addItem(MenuItem item)
+    +void removeItem(String label)
+    +MenuItem hitTest(int mx, int my)
+}
+class MenuItem {
+    +String label
+    +String icon
+    +bool enabled
+    +bool separator
+    +void onClick()
+    +void setEnabled(bool e)
+    +String render()
+}
+ContextMenu o-- MenuItem : contains
+@enduml

@@ -26,7 +26,8 @@ void DocumentStore::initialize_db() {
     "CREATE TABLE IF NOT EXISTS src_type (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE);"
     "CREATE TABLE IF NOT EXISTS uml (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, schema BLOB, UNIQUE(name, schema));"
     "CREATE TABLE IF NOT EXISTS uml_src (id INTEGER PRIMARY KEY AUTOINCREMENT, uml_id INTEGER, src_type_id INTEGER, source BLOB, UNIQUE(uml_id, src_type_id, source));"
-    "CREATE TABLE IF NOT EXISTS uml_embeddings (uml_name TEXT PRIMARY KEY, embedding BLOB);";
+    "CREATE TABLE IF NOT EXISTS uml_embeddings (uml_name TEXT PRIMARY KEY, embedding BLOB);"
+    "CREATE TABLE IF NOT EXISTS uml_events (id INTEGER PRIMARY KEY AUTOINCREMENT, uml_id INTEGER, event_name TEXT, target_uml TEXT, target_src_type INTEGER, target_source BLOB, UNIQUE(uml_id, event_name));";
     char* errmsg = nullptr;
     if (sqlite3_exec(db, sql, nullptr, nullptr, &errmsg) != SQLITE_OK) {
         std::string error = errmsg;
@@ -518,10 +519,22 @@ nlohmann::json DocumentStore::get_source_types() {
     return result;
 }
 
-bool DocumentStore::create_uml_container(const std::string& name,
+int DocumentStore::create_uml_container(const std::string& name,
                                           const std::string& uml_schema,
-                                          const std::vector<std::pair<uint8_t, std::string>>& sources) {
+                                          const std::vector<std::pair<uint8_t, std::string>>& sources,
+                                          const std::vector<nlohmann::json>& events) {
     std::unique_lock lock(mtx_);
+    {
+        sqlite3_stmt* chk;
+        sqlite3_prepare_v2(db, "SELECT id FROM uml WHERE name=?", -1, &chk, nullptr);
+        sqlite3_bind_text(chk, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+        bool exists = (sqlite3_step(chk) == SQLITE_ROW);
+        sqlite3_finalize(chk);
+        if (exists) {
+            Logger::Info("DocumentStore::create_uml_container: '{}' already exists, skipping", name);
+            return 2;
+        }
+    }
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db, "INSERT INTO uml(name, schema) VALUES(?,?)", -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
@@ -529,7 +542,7 @@ bool DocumentStore::create_uml_container(const std::string& name,
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         Logger::Error("DocumentStore::create_uml_container: insert into uml failed: {}", sqlite3_errmsg(db));
         sqlite3_finalize(stmt);
-        return false;
+        return 0;
     }
     sqlite3_finalize(stmt);
     int64_t uml_id = sqlite3_last_insert_rowid(db);
@@ -544,8 +557,71 @@ bool DocumentStore::create_uml_container(const std::string& name,
         sqlite3_reset(stmt);
     }
     sqlite3_finalize(stmt);
+    if (!events.empty()) {
+        add_uml_events(uml_id, events);
+    }
     serialize();
+    return 1;
+}
+
+bool DocumentStore::add_uml_events(int64_t uml_id, const std::vector<nlohmann::json>& events) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO uml_events(uml_id, event_name, target_uml, target_src_type, target_source) VALUES(?,?,?,?,?)", -1, &stmt, nullptr);
+    for (const auto& ev : events) {
+        std::string event_name = ev.value("event_name", "");
+        std::string target_uml = ev.value("target_uml", "");
+        int target_src_type = ev.value("target_src_type", 1);
+        std::string target_source = ev.value("target_source", "");
+        if (event_name.empty()) continue;
+        sqlite3_bind_int64(stmt, 1, uml_id);
+        sqlite3_bind_text(stmt, 2, event_name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, target_uml.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 4, target_src_type);
+        sqlite3_bind_blob(stmt, 5, target_source.c_str(), target_source.size(), SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            Logger::Error("DocumentStore::add_uml_events: insert failed: {}", sqlite3_errmsg(db));
+        }
+        sqlite3_reset(stmt);
+    }
+    sqlite3_finalize(stmt);
     return true;
+}
+
+nlohmann::json DocumentStore::get_uml_events(int64_t uml_id) {
+    nlohmann::json result = nlohmann::json::array();
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT event_name, target_uml, target_src_type, target_source FROM uml_events WHERE uml_id=?", -1, &stmt, nullptr);
+    sqlite3_bind_int64(stmt, 1, uml_id);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        nlohmann::json ev;
+        ev["event_name"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        const char* target_uml = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        ev["target_uml"] = target_uml ? target_uml : "";
+        ev["target_src_type"] = sqlite3_column_int(stmt, 2);
+        const void* src_blob = sqlite3_column_blob(stmt, 3);
+        int src_size = sqlite3_column_bytes(stmt, 3);
+        ev["target_source"] = (src_blob && src_size > 0) ? std::string(reinterpret_cast<const char*>(src_blob), src_size) : "";
+        result.push_back(ev);
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+nlohmann::json DocumentStore::list_uml_events_all() {
+    nlohmann::json result = nlohmann::json::array();
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT e.uml_id, u.name, e.event_name, e.target_uml FROM uml_events e JOIN uml u ON e.uml_id = u.id", -1, &stmt, nullptr);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        nlohmann::json ev;
+        ev["uml_id"] = sqlite3_column_int64(stmt, 0);
+        ev["uml_name"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        ev["event_name"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        const char* target = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        ev["target_uml"] = target ? target : "";
+        result.push_back(ev);
+    }
+    sqlite3_finalize(stmt);
+    return result;
 }
 
 void DocumentStore::store_uml_embedding(const std::string& uml_name, const std::vector<double>& embedding) {
@@ -923,6 +999,8 @@ nlohmann::json DocumentStore::list_uml_blocks() {
         }
         sqlite3_finalize(src_stmt);
         block["sources"] = sources;
+        nlohmann::json events = get_uml_events(id);
+        block["events"] = events;
         result.push_back(std::move(block));
     }
     sqlite3_finalize(stmt);
@@ -976,6 +1054,7 @@ nlohmann::json DocumentStore::compose_uml_project(const std::vector<std::string>
         }
         sqlite3_finalize(src_stmt);
         block["sources"] = sources;
+        block["events"] = get_uml_events(id);
         project["blocks"].push_back(std::move(block));
 
         uml_text += "' Block: " + uml_name + "\n";

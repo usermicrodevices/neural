@@ -833,20 +833,20 @@ class Cat(Animal):
 }
 
 test_phonebook_constructor() {
-    section "TEST: Phone Book UML Constructor"
+    section "TEST: Abstract UML Constructor"
 
-    log "Step 1: Train phone book UML blocks"
-    local blocks=("PhoneTable" "ButtonAdd" "ButtonEdit" "ButtonDelete" "SearchField")
-    local schemas=("$(cat ${PROJECT_ROOT}/examples/phonebook/uml_phone_table.puml)"
-                   "$(cat ${PROJECT_ROOT}/examples/phonebook/uml_button_add.puml)"
-                   "$(cat ${PROJECT_ROOT}/examples/phonebook/uml_button_edit.puml)"
-                   "$(cat ${PROJECT_ROOT}/examples/phonebook/uml_button_delete.puml)"
-                   "$(cat ${PROJECT_ROOT}/examples/phonebook/uml_search_field.puml)")
-    local sources=("$(cat ${PROJECT_ROOT}/examples/phonebook/src_phone_table.cpp)"
-                   "$(cat ${PROJECT_ROOT}/examples/phonebook/src_button_add.cpp)"
-                   "$(cat ${PROJECT_ROOT}/examples/phonebook/src_button_edit.cpp)"
-                   "$(cat ${PROJECT_ROOT}/examples/phonebook/src_button_delete.cpp)"
-                   "$(cat ${PROJECT_ROOT}/examples/phonebook/src_search_field.cpp)")
+    log "Step 1: Train abstract UML blocks"
+    local blocks=("DataTable" "ButtonAdd" "ButtonEdit" "ButtonDelete" "SearchField")
+    local schemas=("$(cat ${PROJECT_ROOT}/examples/uml/data_table.puml)"
+                   "$(cat ${PROJECT_ROOT}/examples/uml/button_add.puml)"
+                   "$(cat ${PROJECT_ROOT}/examples/uml/button_edit.puml)"
+                   "$(cat ${PROJECT_ROOT}/examples/uml/button_delete.puml)"
+                   "$(cat ${PROJECT_ROOT}/examples/uml/search_field.puml)")
+    local sources=("$(cat ${PROJECT_ROOT}/examples/c++/data_table.cpp)"
+                   "$(cat ${PROJECT_ROOT}/examples/c++/button_add.cpp)"
+                   "$(cat ${PROJECT_ROOT}/examples/c++/button_edit.cpp)"
+                   "$(cat ${PROJECT_ROOT}/examples/c++/button_delete.cpp)"
+                   "$(cat ${PROJECT_ROOT}/examples/c++/search_field.cpp)")
 
     for i in "${!blocks[@]}"; do
         local name="${blocks[$i]}"
@@ -877,16 +877,16 @@ test_phonebook_constructor() {
     log "Step 3: List available blocks"
     local list_resp=$(curl -s --max-time 10 "${CLIENT_URL}/list_uml" 2>/dev/null)
     log "  Blocks response: $(echo "$list_resp" | head -c 200)"
-    if echo "$list_resp" | grep -q "PhoneTable"; then
+    if echo "$list_resp" | grep -q "DataTable"; then
         pass "List UML blocks"
     else
-        fail "List UML blocks - expected PhoneTable in response"
+        fail "List UML blocks - expected DataTable in response"
     fi
 
     log "Step 4: Compose project from selected blocks"
     local compose_resp=$(curl -s --max-time 10 -X POST "${CLIENT_URL}/compose" \
         -H "Content-Type: application/json" \
-        -d '{"blocks":["PhoneTable","ButtonAdd","ButtonEdit"]}' 2>/dev/null)
+        -d '{"blocks":["DataTable","ButtonAdd","ButtonEdit"]}' 2>/dev/null)
     log "  Compose response: $(echo "$compose_resp" | head -c 200)"
     if echo "$compose_resp" | grep -q "combined_sources"; then
         pass "Compose UML project"

@@ -37,6 +37,7 @@ public:
     std::future<std::string> enqueue_src_types();
     bool dequeue_src_types(JobAdmin& job);
     std::future<std::string> enqueue_train_uml(const std::vector<uint8_t>& payload);
+    std::future<std::string> enqueue_list_uml();
     int current_progress() const;
     bool is_training() const;
     void update_progress(int pct);
@@ -76,6 +77,7 @@ private:
     void get_config(std::shared_ptr<asio::ip::tcp::socket> s);
     void get_progress(std::shared_ptr<asio::ip::tcp::socket> s);
     void get_src_types(std::shared_ptr<asio::ip::tcp::socket> s);
+    void get_list_uml(std::shared_ptr<asio::ip::tcp::socket> s);
     void get_train_uml(std::shared_ptr<asio::ip::tcp::socket> s);
     void get_or_post_show_db(std::shared_ptr<asio::ip::tcp::socket> s, int content_length, asio::error_code& ec);
     void post_get_table(std::shared_ptr<asio::ip::tcp::socket> s, int content_length, asio::error_code& ec);

@@ -4,6 +4,29 @@
 <meta charset="UTF-8">
 <title>neural-admin-uml</title>
 <link rel="stylesheet" href="static/admin/admin.css">
+<style>
+.batch-blocks { margin: 8px 0; }
+.batch-block { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 4px; font-size: 13px; }
+.batch-block .name { font-weight: bold; min-width: 120px; }
+.batch-block .files { color: #666; flex: 1; }
+.batch-block .dup { color: #e65100; font-size: 11px; }
+.batch-block .ok { color: #2e7d32; font-size: 11px; }
+.batch-block.existing { border-color: #ff9800; background: #fff3e0; }
+.preview-header { font-weight: bold; margin: 12px 0 4px; font-size: 13px; color: #333; }
+.dir-select-area { border: 2px dashed #ccc; border-radius: 6px; padding: 16px; text-align: center; margin: 8px 0; cursor: pointer; color: #888; font-size: 13px; }
+.dir-select-area:hover { border-color: #2196F3; color: #2196F3; }
+.dir-select-area.active { border-color: #4CAF50; background: #e8f5e9; color: #333; }
+.train-btn { background: #4CAF50; color: #fff; padding: 10px 24px; border: none; border-radius: 4px; font-size: 14px; cursor: pointer; margin-top: 8px; }
+.train-btn:disabled { background: #ccc; cursor: not-allowed; }
+.train-btn:hover:not(:disabled) { background: #43a047; }
+.progress-bar { width: 100%; height: 6px; background: #e0e0e0; border-radius: 3px; margin: 8px 0; overflow: hidden; display: none; }
+.progress-bar .fill { height: 100%; background: #4CAF50; width: 0%; transition: width 0.3s; }
+.log-entry { padding: 4px 8px; font-size: 12px; border-bottom: 1px solid #eee; }
+.log-entry.ok { color: #2e7d32; }
+.log-entry.err { color: #c62828; }
+.log-entry.skip { color: #e65100; }
+.log-entry.info { color: #555; }
+</style>
 </head>
 <body>
 <div class="toolbar">
@@ -14,24 +37,51 @@
     <button id="btnStop" title="Stop Service">🛑</button>
 </div>
 <div class="card">
-    <h2>📦 Create a UML container with Source Files</h2>
-    <form id="umlForm" enctype="multipart/form-data">
-        <label for="uml_name">UML name:</label>
-        <input type="text" id="uml_name" name="uml_name" required style="width:100%; margin-bottom:1rem;">
+    <h2>📦 Train UML Blocks from Directory</h2>
 
-        <label>Source Files (each with a type):</label>
-        <div id="sourcesContainer"></div>
-        <button type="button" id="addSourceBtn" class="add-source-btn">➕ Add another source file</button>
+    <div class="dir-select-area" id="dropZone">
+        Drop directory here or click to select<br>
+        <small>Auto-detects: .puml/.uml → schema, .cpp/.py/.js/.html → source</small>
+        <input type="file" id="dirInput" webkitdirectory directory multiple style="display:none">
+    </div>
 
-        <label for="uml_file">UML Diagram (UML text file, optional):</label>
-        <input type="file" id="uml_file" name="uml_file" accept=".uml,.txt,.puml">
-
-        <div class="flex-row" style="margin-top:1rem;">
-            <button type="submit">➕ Create UML container</button>
-            <div id="status" class="status"></div>
+    <div id="previewSection" style="display:none;">
+        <div class="preview-header">Blocks to train (<span id="blockCount">0</span>):</div>
+        <div id="batchBlocks" class="batch-blocks"></div>
+        <div style="margin-top:8px;">
+            <button class="train-btn" id="trainAllBtn" disabled>Train All</button>
+            <button class="train-btn" id="trainNewBtn" disabled style="background:#FF9800;">Train New Only</button>
         </div>
-    </form>
+        <div class="progress-bar" id="progressBar"><div class="fill" id="progressFill"></div></div>
+        <div id="trainLog" style="max-height:300px;overflow-y:auto;margin-top:8px;"></div>
+    </div>
+
     <div id="statusConsole" class="status-console"></div>
+
+    <hr style="margin:16px 0;border:none;border-top:1px solid #eee;">
+    <details>
+        <summary style="cursor:pointer;font-size:13px;color:#666;">Manual single-block training</summary>
+        <form id="umlForm" enctype="multipart/form-data" style="margin-top:8px;">
+            <label for="uml_name">UML name:</label>
+            <input type="text" id="uml_name" name="uml_name" required style="width:100%; margin-bottom:1rem;">
+
+            <label>Source Files (each with a type):</label>
+            <div id="sourcesContainer"></div>
+            <button type="button" id="addSourceBtn" class="add-source-btn">➕ Add another source file</button>
+
+            <label for="uml_file">UML Diagram (UML text file, optional):</label>
+            <input type="file" id="uml_file" name="uml_file" accept=".uml,.txt,.puml">
+
+            <label style="margin-top:1rem;">Events (link to trained UML blocks):</label>
+            <div id="eventsContainer"></div>
+            <button type="button" id="addEventBtn" class="add-source-btn">➕ Add event</button>
+
+            <div class="flex-row" style="margin-top:1rem;">
+                <button type="submit">➕ Create UML container</button>
+                <div id="status" class="status"></div>
+            </div>
+        </form>
+    </details>
 </div>
 <script src="static/admin/admin_uml.js"></script>
 </body>

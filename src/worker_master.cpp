@@ -124,8 +124,49 @@ void WorkerMaster::run() {
                             admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {0}});
                             break;
                         }
-                        bool ok = store_->create_uml_container(name, uml_schema, sources);
-                        admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {static_cast<uint8_t>(ok ? 1 : 0)}});
+                        std::vector<nlohmann::json> events;
+                        if (it + 2 <= end) {
+                            uint16_t event_count;
+                            std::memcpy(&event_count, &*it, 2);
+                            event_count = ntohs(event_count);
+                            it += 2;
+                            for (uint16_t i = 0; i < event_count; ++i) {
+                                if (it + 4 > end) { parse_ok = false; break; }
+                                uint32_t ev_name_len;
+                                std::memcpy(&ev_name_len, &*it, 4);
+                                ev_name_len = ntohl(ev_name_len);
+                                it += 4;
+                                if (it + ev_name_len > end) { parse_ok = false; break; }
+                                std::string ev_name(it, it + ev_name_len);
+                                it += ev_name_len;
+                                if (it + 4 > end) { parse_ok = false; break; }
+                                uint32_t tgt_uml_len;
+                                std::memcpy(&tgt_uml_len, &*it, 4);
+                                tgt_uml_len = ntohl(tgt_uml_len);
+                                it += 4;
+                                if (it + tgt_uml_len > end) { parse_ok = false; break; }
+                                std::string tgt_uml(it, it + tgt_uml_len);
+                                it += tgt_uml_len;
+                                if (it + 1 > end) { parse_ok = false; break; }
+                                uint8_t tgt_src_type = *it++;
+                                if (it + 4 > end) { parse_ok = false; break; }
+                                uint32_t tgt_src_len;
+                                std::memcpy(&tgt_src_len, &*it, 4);
+                                tgt_src_len = ntohl(tgt_src_len);
+                                it += 4;
+                                if (it + tgt_src_len > end) { parse_ok = false; break; }
+                                std::string tgt_src(it, it + tgt_src_len);
+                                it += tgt_src_len;
+                                nlohmann::json ev;
+                                ev["event_name"] = ev_name;
+                                ev["target_uml"] = tgt_uml;
+                                ev["target_src_type"] = tgt_src_type;
+                                ev["target_source"] = tgt_src;
+                                events.push_back(ev);
+                            }
+                        }
+                        int result = store_->create_uml_container(name, uml_schema, sources, events);
+                        admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {static_cast<uint8_t>(result)}});
                         break;
                     }
                     case JobTypeAdmin::LIST_UML: {
@@ -158,6 +199,18 @@ void WorkerMaster::run() {
                             nlohmann::json errjson = {{"error", err.what()}};
                             std::string err_str = errjson.dump();
                             admin_sock_->send(Message{JobTypeAdmin::COMPOSE_DONE, {err_str.begin(), err_str.end()}});
+                        }
+                        break;
+                    }
+                    case JobTypeAdmin::LIST_UMLEVENTS: {
+                        try {
+                            nlohmann::json result = store_->list_uml_events_all();
+                            std::string json_str = result.dump();
+                            admin_sock_->send(Message{JobTypeAdmin::LIST_UMLEVENTS_DONE, {json_str.begin(), json_str.end()}});
+                        } catch (const std::exception& err) {
+                            nlohmann::json errjson = {{"error", err.what()}};
+                            std::string err_str = errjson.dump();
+                            admin_sock_->send(Message{JobTypeAdmin::LIST_UMLEVENTS_DONE, {err_str.begin(), err_str.end()}});
                         }
                         break;
                     }
