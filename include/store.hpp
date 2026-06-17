@@ -41,6 +41,14 @@ public:
                               const std::vector<std::pair<uint8_t, std::string>>& sources);
     nlohmann::json get_uml_container(const std::string& name);
     nlohmann::json search_uml(const std::string& query);
+    nlohmann::json search_uml_by_embedding(const std::vector<double>& query_embedding, double threshold = 0.5);
+    void store_uml_embedding(const std::string& uml_name, const std::vector<double>& embedding);
+    nlohmann::json search_uml_nearest(const std::string& query, double threshold = 0.5);
+    nlohmann::json list_uml_blocks();
+    nlohmann::json compose_uml_project(const std::vector<std::string>& block_names);
+    Vocabulary* getVocab() const { return vocab.get(); }
+    NeuralNetwork* getNet() const { return net.get(); }
+    static std::string clean_text(const std::string& text);
     nlohmann::json list_tables();
     nlohmann::json get_table_data(const std::string& table, const std::string& filter, int offset = 0, int limit = 100);
 
@@ -63,7 +71,6 @@ private:
     void save_state();
     void load_from_persistent();
     std::vector<std::string> split_into_chunks(const std::string& text);
-    static std::string clean_text(const std::string& text);
     void rebuild_vector_cache();
     void ensure_vector_cache();
 };

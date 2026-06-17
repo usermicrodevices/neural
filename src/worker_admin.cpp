@@ -3,15 +3,15 @@
 void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
     IpcSocket sock(child_fd);
     asio::io_context io;
-    HttpAdminSrv server(io, 8080);
-    //Logger::Info("WorkerAdmin::runChild: neural memory usage = {}", memory_usage);
-    server.set_memory_usage(memory_usage);
-    server.start();
-    while (true) {
-        JobAdmin job;
-        if (!server.dequeue(job))
-            break;
-        switch(job.type){
+    try {
+        HttpAdminSrv server(io, 8080);
+        server.set_memory_usage(memory_usage);
+        server.start();
+        while (true) {
+            JobAdmin job;
+            if (!server.dequeue(job))
+                break;
+            switch(job.type){
             case JobTypeAdmin::SRC_TYPES: {
                 sock.send(Message{JobTypeAdmin::SRC_TYPES, {}});
                 Message msg = sock.recv();
@@ -70,10 +70,12 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
             case JobTypeAdmin::TRAIN_DONE: break;
             case JobTypeAdmin::TRAIN_UML: {
                 try {
+                    server.set_training_started();
                     sock.send(Message{JobTypeAdmin::TRAIN_UML, job.data});
                     Message ack = sock.recv();
                     if (ack.cmd == JobTypeAdmin::TRAIN_UML_DONE) {
                         bool ok = !ack.payload.empty() && ack.payload[0] == 1;
+                        server.set_training_done();
                         if (ok) {
                             job.response.set_value("");
                         } else {
@@ -82,14 +84,46 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
                                     std::runtime_error("TRAIN_UML failed: database insert error")));
                         }
                     } else {
+                        server.set_training_done();
                         throw std::runtime_error("WorkerAdmin::runChild unexpected response for TRAIN_UML");
+                    }
+                } catch (const std::exception& err) {
+                    server.set_training_done();
+                    job.response.set_exception(std::make_exception_ptr(err));
+                }
+                break;
+            }
+            case JobTypeAdmin::TRAIN_UML_DONE: break;
+            case JobTypeAdmin::LIST_UML: {
+                try {
+                    sock.send(Message{JobTypeAdmin::LIST_UML, job.data});
+                    Message ack = sock.recv();
+                    if (ack.cmd == JobTypeAdmin::LIST_UML_DONE) {
+                        job.response.set_value(std::string(ack.payload.begin(), ack.payload.end()));
+                    } else {
+                        throw std::runtime_error("WorkerAdmin::runChild unexpected response for LIST_UML");
                     }
                 } catch (const std::exception& err) {
                     job.response.set_exception(std::make_exception_ptr(err));
                 }
                 break;
             }
-            case JobTypeAdmin::TRAIN_UML_DONE: break;
+            case JobTypeAdmin::LIST_UML_DONE: break;
+            case JobTypeAdmin::COMPOSE: {
+                try {
+                    sock.send(Message{JobTypeAdmin::COMPOSE, job.data});
+                    Message ack = sock.recv();
+                    if (ack.cmd == JobTypeAdmin::COMPOSE_DONE) {
+                        job.response.set_value(std::string(ack.payload.begin(), ack.payload.end()));
+                    } else {
+                        throw std::runtime_error("WorkerAdmin::runChild unexpected response for COMPOSE");
+                    }
+                } catch (const std::exception& err) {
+                    job.response.set_exception(std::make_exception_ptr(err));
+                }
+                break;
+            }
+            case JobTypeAdmin::COMPOSE_DONE: break;
             case JobTypeAdmin::GET_TABLE: {
                 auto it = job.data.begin();
                 std::string table_name, filter_text;
@@ -160,6 +194,10 @@ void WorkerAdmin::runChild(int child_fd, size_t memory_usage) {
         }
     }
     server.stop();
+    } catch (const std::exception& err) {
+        Logger::Error("Admin worker failed to start: {}", err.what());
+        exit(1);
+    }
 }
 
 WorkerAdmin::WorkerAdmin(int child_fd, int admin_fd, int client_fd, size_t memory_usage) {

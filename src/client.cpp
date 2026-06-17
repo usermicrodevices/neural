@@ -58,6 +58,101 @@ bool HttpClientSrv::dequeue_ask(std::string& prompt, double& threshold, std::pro
     return true;
 }
 
+void HttpClientSrv::enqueue_uml_search(const std::string& query, double threshold, std::promise<std::string>&& promise) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    uml_search_jobs_.push({query, threshold, std::move(promise)});
+    cv_.notify_one();
+}
+
+bool HttpClientSrv::dequeue_uml_search(std::string& query, double& threshold, std::promise<std::string>& promise) {
+    std::unique_lock<std::mutex> lock(mtx_);
+    cv_.wait(lock, [this]() { return !uml_search_jobs_.empty() || stop_; });
+    if (stop_ && uml_search_jobs_.empty()) return false;
+    JobUMLSearch job = std::move(uml_search_jobs_.front()); uml_search_jobs_.pop();
+    query = std::move(job.query);
+    threshold = job.threshold;
+    promise = std::move(job.answer);
+    return true;
+}
+
+bool HttpClientSrv::try_dequeue_uml_search(std::string& query, double& threshold, std::promise<std::string>& promise) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (uml_search_jobs_.empty()) return false;
+    JobUMLSearch job = std::move(uml_search_jobs_.front()); uml_search_jobs_.pop();
+    query = std::move(job.query);
+    threshold = job.threshold;
+    promise = std::move(job.answer);
+    return true;
+}
+
+void HttpClientSrv::enqueue_list_uml(std::promise<std::string>&& promise) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    list_uml_jobs_.push({std::move(promise)});
+    cv_.notify_one();
+}
+
+bool HttpClientSrv::dequeue_list_uml(std::promise<std::string>& promise) {
+    std::unique_lock<std::mutex> lock(mtx_);
+    cv_.wait(lock, [this]() { return !list_uml_jobs_.empty() || stop_; });
+    if (stop_ && list_uml_jobs_.empty()) return false;
+    JobListUML job = std::move(list_uml_jobs_.front()); list_uml_jobs_.pop();
+    promise = std::move(job.answer);
+    return true;
+}
+
+void HttpClientSrv::enqueue_compose(const std::vector<std::string>& block_names, std::promise<std::string>&& promise) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    compose_jobs_.push({block_names, std::move(promise)});
+    cv_.notify_one();
+}
+
+bool HttpClientSrv::dequeue_compose(std::vector<std::string>& block_names, std::promise<std::string>& promise) {
+    std::unique_lock<std::mutex> lock(mtx_);
+    cv_.wait(lock, [this]() { return !compose_jobs_.empty() || stop_; });
+    if (stop_ && compose_jobs_.empty()) return false;
+    JobCompose job = std::move(compose_jobs_.front()); compose_jobs_.pop();
+    block_names = std::move(job.block_names);
+    promise = std::move(job.answer);
+    return true;
+}
+
+enum class DequeueResult { NONE, PROMPT, UML_SEARCH, LIST_UML, COMPOSE };
+
+HttpClientSrv::DequeueResult HttpClientSrv::dequeue_any(std::string& prompt, double& threshold, std::promise<std::string>& promise,
+                                          std::string& uml_query, double& uml_threshold, std::promise<std::string>& uml_promise,
+                                          std::promise<std::string>& list_uml_promise,
+                                          std::vector<std::string>& compose_block_names, std::promise<std::string>& compose_promise) {
+    std::unique_lock<std::mutex> lock(mtx_);
+    cv_.wait(lock, [this]() { return !jobs_.empty() || !uml_search_jobs_.empty() || !list_uml_jobs_.empty() || !compose_jobs_.empty() || stop_; });
+    if (stop_ && jobs_.empty() && uml_search_jobs_.empty() && list_uml_jobs_.empty() && compose_jobs_.empty()) return DequeueResult::NONE;
+    if (!list_uml_jobs_.empty()) {
+        JobListUML job = std::move(list_uml_jobs_.front()); list_uml_jobs_.pop();
+        list_uml_promise = std::move(job.answer);
+        return DequeueResult::LIST_UML;
+    }
+    if (!compose_jobs_.empty()) {
+        JobCompose job = std::move(compose_jobs_.front()); compose_jobs_.pop();
+        compose_block_names = std::move(job.block_names);
+        compose_promise = std::move(job.answer);
+        return DequeueResult::COMPOSE;
+    }
+    if (!uml_search_jobs_.empty()) {
+        JobUMLSearch job = std::move(uml_search_jobs_.front()); uml_search_jobs_.pop();
+        uml_query = std::move(job.query);
+        uml_threshold = job.threshold;
+        uml_promise = std::move(job.answer);
+        return DequeueResult::UML_SEARCH;
+    }
+    if (!jobs_.empty()) {
+        JobPrompt job = std::move(jobs_.front()); jobs_.pop();
+        prompt = std::move(job.prompt);
+        threshold = job.threshold;
+        promise = std::move(job.answer);
+        return DequeueResult::PROMPT;
+    }
+    return DequeueResult::NONE;
+}
+
 void HttpClientSrv::do_accept() {
     acceptor_.async_accept([this](std::error_code ec, asio::ip::tcp::socket socket) {
         if (!ec) std::thread(&HttpClientSrv::handle_request, this, std::make_shared<asio::ip::tcp::socket>(std::move(socket))).detach();
@@ -84,6 +179,21 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
             if (serve_static_file(*s, "static/client/client.html", ec)) return;
             std::string resp = build_response("text/plain", "Index not found");
             asio::write(*s, asio::buffer(resp), ec);
+            return;
+        }
+        if (method == "GET" && path == "/list_uml") {
+            try {
+                std::promise<std::string> promise;
+                auto fut = promise.get_future();
+                enqueue_list_uml(std::move(promise));
+                std::string result = fut.get();
+                std::string http_resp = build_response("application/json", result);
+                asio::write(*s, asio::buffer(http_resp), ec);
+            } catch (const std::exception& e) {
+                Logger::Error("GET /list_uml error: {}", e.what());
+                std::string http_resp = build_response("application/json", "{\"error\":\"" + std::string(e.what()) + "\"}");
+                asio::write(*s, asio::buffer(http_resp), ec);
+            }
             return;
         }
         if (method == "GET") {
@@ -284,6 +394,66 @@ void HttpClientSrv::handle_request(std::shared_ptr<asio::ip::tcp::socket> s) {
                 error["error"] = {{"message", err.what()}, {"type", "invalid_request_error"}, {"code", 400}};
                 std::string resp = build_response("application/json", error.dump());
                 asio::write(*s, asio::buffer(resp), ec);
+            }
+            return;
+        }
+        if (method == "POST" && path == "/search_uml") {
+            if (content_length <= 0) {
+                Logger::Warn("HttpClientSrv::handle_request: POST /search_uml without Content-Length");
+                std::string resp = build_response("application/json", "{\"error\":\"Content-Length required\"}");
+                asio::write(*s, asio::buffer(resp), ec);
+                return;
+            }
+            std::vector<char> body;
+            read_body(*s, content_length, body, ec);
+            if (ec) { Logger::Error("POST /search_uml body read: {}", ec.message()); return; }
+            std::string json_body(body.begin(), body.end());
+            try {
+                auto req = nlohmann::json::parse(json_body);
+                std::string query = req.at("query").get<std::string>();
+                double threshold = req.value("threshold", 0.5);
+                std::promise<std::string> promise;
+                auto fut = promise.get_future();
+                enqueue_uml_search(query, threshold, std::move(promise));
+                std::string result = fut.get();
+                std::string http_resp = build_response("application/json", result);
+                asio::write(*s, asio::buffer(http_resp), ec);
+            } catch (const std::exception& e) {
+                Logger::Error("POST /search_uml error: {}", e.what());
+                std::string err = "{\"error\":\"" + std::string(e.what()) + "\"}";
+                std::string http_resp = build_response("application/json", err);
+                asio::write(*s, asio::buffer(http_resp), ec);
+            }
+            return;
+        }
+        if (method == "POST" && path == "/compose") {
+            if (content_length <= 0) {
+                std::string resp = build_response("application/json", "{\"error\":\"Content-Length required\"}");
+                asio::write(*s, asio::buffer(resp), ec);
+                return;
+            }
+            std::vector<char> body;
+            read_body(*s, content_length, body, ec);
+            if (ec) { Logger::Error("POST /compose body read: {}", ec.message()); return; }
+            std::string json_body(body.begin(), body.end());
+            try {
+                auto req = nlohmann::json::parse(json_body);
+                std::vector<std::string> block_names;
+                if (req.contains("blocks") && req["blocks"].is_array()) {
+                    for (auto& b : req["blocks"]) {
+                        block_names.push_back(b.get<std::string>());
+                    }
+                }
+                std::promise<std::string> promise;
+                auto fut = promise.get_future();
+                enqueue_compose(block_names, std::move(promise));
+                std::string result = fut.get();
+                std::string http_resp = build_response("application/json", result);
+                asio::write(*s, asio::buffer(http_resp), ec);
+            } catch (const std::exception& e) {
+                Logger::Error("POST /compose error: {}", e.what());
+                std::string http_resp = build_response("application/json", "{\"error\":\"" + std::string(e.what()) + "\"}");
+                asio::write(*s, asio::buffer(http_resp), ec);
             }
             return;
         }

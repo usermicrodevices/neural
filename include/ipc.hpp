@@ -17,10 +17,16 @@ enum JobTypeAdmin {
     SRC_TYPES,
     TRAIN_UML,
     TRAIN_UML_DONE,
+    LIST_UML,
+    LIST_UML_DONE,
+    COMPOSE,
+    COMPOSE_DONE,
     LIST_TABLES,
     GET_TABLE,
     SERIALIZE,
-    SHUTDOWN
+    SHUTDOWN,
+    SEARCH_UML,
+    SEARCH_UML_DONE
 };
 
 struct Message {
@@ -41,4 +47,15 @@ private:
     std::vector<uint8_t> pack_message(uint8_t cmd, const std::vector<uint8_t>& payload);
     void read_all(void* buf, size_t n);
     void write_all(const void* buf, size_t n);
+};
+
+enum JobTypeClient : uint8_t {
+    ASK = 0x01,
+    ASK_DONE = 0x02,
+    SEARCH_UML_CLIENT = 0x0A,
+    SEARCH_UML_DONE_CLIENT = 0x0B,
+    LIST_UML_CLIENT = 0x0C,
+    LIST_UML_DONE_CLIENT = 0x0D,
+    COMPOSE_CLIENT = 0x0E,
+    COMPOSE_DONE_CLIENT = 0x0F,
 };

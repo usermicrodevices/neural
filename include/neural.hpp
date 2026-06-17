@@ -19,6 +19,7 @@ public:
     void train_batch(const std::vector<std::vector<double>>& inputs,
                      const std::vector<int>& labels, double lr);
     std::pair<int,double> predict(const std::vector<double>& input) const;
+    std::vector<double> get_embedding(const std::vector<double>& input) const;
     int input_size() const;
     int output_size() const;
     std::vector<double>& GetW1();

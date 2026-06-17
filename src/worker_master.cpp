@@ -128,6 +128,39 @@ void WorkerMaster::run() {
                         admin_sock_->send(Message{JobTypeAdmin::TRAIN_UML_DONE, {static_cast<uint8_t>(ok ? 1 : 0)}});
                         break;
                     }
+                    case JobTypeAdmin::LIST_UML: {
+                        try {
+                            nlohmann::json result = store_->list_uml_blocks();
+                            std::string json_str = result.dump();
+                            admin_sock_->send(Message{JobTypeAdmin::LIST_UML_DONE, {json_str.begin(), json_str.end()}});
+                        } catch (const std::exception& err) {
+                            nlohmann::json errjson = {{"error", err.what()}};
+                            std::string err_str = errjson.dump();
+                            admin_sock_->send(Message{JobTypeAdmin::LIST_UML_DONE, {err_str.begin(), err_str.end()}});
+                        }
+                        break;
+                    }
+                    case JobTypeAdmin::COMPOSE: {
+                        try {
+                            std::vector<std::string> block_names;
+                            auto it = msg.payload.begin();
+                            auto end = msg.payload.end();
+                            while (it != end) {
+                                std::string name;
+                                while (it != end && *it != 0) name.push_back(*it++);
+                                if (it != end) ++it;
+                                if (!name.empty()) block_names.push_back(name);
+                            }
+                            nlohmann::json result = store_->compose_uml_project(block_names);
+                            std::string json_str = result.dump();
+                            admin_sock_->send(Message{JobTypeAdmin::COMPOSE_DONE, {json_str.begin(), json_str.end()}});
+                        } catch (const std::exception& err) {
+                            nlohmann::json errjson = {{"error", err.what()}};
+                            std::string err_str = errjson.dump();
+                            admin_sock_->send(Message{JobTypeAdmin::COMPOSE_DONE, {err_str.begin(), err_str.end()}});
+                        }
+                        break;
+                    }
                     case JobTypeAdmin::GET_TABLE: {
                         auto it = msg.payload.begin();
                         std::string table, filter;
@@ -194,6 +227,46 @@ void WorkerMaster::run() {
                     std::string prompt(msg.payload.begin() + sizeof(double), msg.payload.end());
                     std::string answer = store_->get_answer(prompt, threshold);
                     client_sock_->send(Message{0x05, {answer.begin(), answer.end()}});
+                }
+                else if (msg.cmd == 0x0A) {
+                    if (msg.payload.size() < sizeof(double)) continue;
+                    double threshold;
+                    std::memcpy(&threshold, msg.payload.data(), sizeof(double));
+                    std::string query(msg.payload.begin() + sizeof(double), msg.payload.end());
+                    nlohmann::json results = store_->search_uml_nearest(query, threshold);
+                    std::string json_str = results.dump();
+                    client_sock_->send(Message{0x0B, {json_str.begin(), json_str.end()}});
+                }
+                else if (msg.cmd == 0x0C) {
+                    try {
+                        nlohmann::json result = store_->list_uml_blocks();
+                        std::string json_str = result.dump();
+                        client_sock_->send(Message{0x0D, {json_str.begin(), json_str.end()}});
+                    } catch (const std::exception& err) {
+                        nlohmann::json errjson = {{"error", err.what()}};
+                        std::string err_str = errjson.dump();
+                        client_sock_->send(Message{0x0D, {err_str.begin(), err_str.end()}});
+                    }
+                }
+                else if (msg.cmd == 0x0E) {
+                    try {
+                        std::vector<std::string> block_names;
+                        auto it = msg.payload.begin();
+                        auto end = msg.payload.end();
+                        while (it != end) {
+                            std::string name;
+                            while (it != end && *it != 0) name.push_back(*it++);
+                            if (it != end) ++it;
+                            if (!name.empty()) block_names.push_back(name);
+                        }
+                        nlohmann::json result = store_->compose_uml_project(block_names);
+                        std::string json_str = result.dump();
+                        client_sock_->send(Message{0x0F, {json_str.begin(), json_str.end()}});
+                    } catch (const std::exception& err) {
+                        nlohmann::json errjson = {{"error", err.what()}};
+                        std::string err_str = errjson.dump();
+                        client_sock_->send(Message{0x0F, {err_str.begin(), err_str.end()}});
+                    }
                 }
                 else if (msg.cmd == 0x06) {
                     if (msg.payload.size() < 5) continue;
