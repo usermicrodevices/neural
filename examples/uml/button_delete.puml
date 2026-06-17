@@ -1,0 +1,11 @@
+@startuml ButtonDelete
+class ButtonDelete {
+    +void onClick(int rowId)
+    +void confirm()
+}
+class DataTable {
+    +int selectedRowId
+    +void refresh()
+}
+ButtonDelete --> DataTable : removes selected row
+@enduml

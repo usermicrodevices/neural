@@ -645,6 +645,263 @@ test_e2e_pipeline() {
     pass "E2E: upload=${upload_time}s train=${train_time}s query=${query_time}s total=${total}s"
 }
 
+# ── Test: UML Neural Search ─────────────────────────────────────────────────
+
+test_uml_neural_search() {
+    section "TEST: UML Neural Search"
+
+    log "Restarting server to clear training queue..."
+    # Stop the server
+    curl -sf -X POST "${ADMIN_URL}/stop" 2>/dev/null || true
+    sleep 3
+    kill $(lsof -t -i:${ADMIN_PORT} 2>/dev/null) 2>/dev/null || true
+    kill $(lsof -t -i:${CLIENT_PORT} 2>/dev/null) 2>/dev/null || true
+    sleep 2
+    # Restart with clean DB
+    rm -f "${BUILD_DIR}/data.db"
+    cd "$BUILD_DIR"
+    ./neural &
+    SERVER_PID=$!
+    cd "$PROJECT_ROOT"
+    log "  Server restarted, PID: ${SERVER_PID}"
+    wait_for_server "${ADMIN_URL}/progress" 30
+    wait_for_server "${CLIENT_URL}/" 10
+    log "  Server ready"
+
+    log "Step 0: Train a document to initialize the model"
+    curl -s --max-time 30 -X POST "${ADMIN_URL}/" \
+        -F "document=@${INC_DIR}/vocabulary.hpp" \
+        -F "tags=init" \
+        -F "serialize=0" 2>/dev/null
+    wait_training_done 120
+    log "  Model initialized"
+    local uml_name="TestClass"
+    local uml_schema='@startuml
+class Animal {
+    +String name
+    +int age
+    +void speak()
+}
+class Dog extends Animal {
+    +void fetch()
+}
+class Cat extends Animal {
+    +void scratch()
+}
+@enduml'
+    local cpp_source='class Animal {
+public:
+    std::string name;
+    int age;
+    virtual void speak() = 0;
+    virtual ~Animal() = default;
+};
+
+class Dog : public Animal {
+public:
+    void fetch() override {
+        std::cout << name << " fetches the ball!" << std::endl;
+    }
+    void speak() override {
+        std::cout << name << " says Woof!" << std::endl;
+    }
+};
+
+class Cat : public Animal {
+public:
+    void scratch() override {
+        std::cout << name << " scratches the furniture!" << std::endl;
+    }
+    void speak() override {
+        std::cout << name << " says Meow!" << std::endl;
+    }
+};'
+    local py_source='from abc import ABC, abstractmethod
+
+class Animal(ABC):
+    def __init__(self, name: str, age: int):
+        self.name = name
+        self.age = age
+    
+    @abstractmethod
+    def speak(self) -> str:
+        pass
+
+class Dog(Animal):
+    def fetch(self) -> str:
+        return f"{self.name} fetches the ball!"
+    
+    def speak(self) -> str:
+        return f"{self.name} says Woof!"
+
+class Cat(Animal):
+    def scratch(self) -> str:
+        return f"{self.name} scratches the furniture!"
+    
+    def speak(self) -> str:
+        return f"{self.name} says Meow!"'
+
+    local tmpfile=$(mktemp)
+    echo -n "$cpp_source" > "${tmpfile}.cpp"
+    echo -n "$py_source" > "${tmpfile}.py"
+    echo -n "$uml_schema" > "${tmpfile}.puml"
+
+    local start end elapsed resp
+    start=$(date +%s%N)
+    resp=$(curl -s -X POST "${ADMIN_URL}/train_uml" \
+        -F "uml_name=${uml_name}" \
+        -F "uml_file=@${tmpfile}.puml" \
+        -F "source_files[]=@${tmpfile}.cpp" \
+        -F "source_types[]=1" \
+        -F "source_files[]=@${tmpfile}.py" \
+        -F "source_types[]=2" 2>/dev/null)
+    end=$(date +%s%N)
+    elapsed=$(echo "scale=3; ($end - $start) / 1000000000" | bc)
+
+    log "  Train UML response: $(echo "$resp" | head -c 100)"
+    if echo "$resp" | grep -q '"status"'; then
+        pass "UML training: ${elapsed}s"
+    else
+        fail "UML training failed: $(echo "$resp" | head -c 80)"
+    fi
+
+    log "Step 2: Wait for UML training to complete"
+    wait_training_done 120
+    sleep 2
+
+    log "Step 3: Search UML by name"
+    start=$(date +%s%N)
+    resp=$(curl -s --max-time 30 -X POST "${CLIENT_URL}/search_uml" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\":\"Animal\",\"threshold\":0.0}" 2>/dev/null)
+    end=$(date +%s%N)
+    elapsed=$(echo "scale=3; ($end - $start) / 1000000000" | bc)
+
+    log "  Search response: $(echo "$resp" | head -c 200)"
+    if echo "$resp" | grep -q "name"; then
+        pass "UML search by name: ${elapsed}s"
+    else
+        fail "UML search by name failed"
+    fi
+
+    log "Step 4: Search UML by schema content"
+    start=$(date +%s%N)
+    resp=$(curl -s --max-time 30 -X POST "${CLIENT_URL}/search_uml" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\":\"class Dog extends Animal\",\"threshold\":0.0}" 2>/dev/null)
+    end=$(date +%s%N)
+    elapsed=$(echo "scale=3; ($end - $start) / 1000000000" | bc)
+
+    log "  Search response: $(echo "$resp" | head -c 200)"
+    if echo "$resp" | grep -q "name"; then
+        pass "UML search by schema: ${elapsed}s"
+    else
+        fail "UML search by schema failed"
+    fi
+
+    log "Step 5: Search UML with source code"
+    start=$(date +%s%N)
+    resp=$(curl -s --max-time 30 -X POST "${CLIENT_URL}/search_uml" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\":\"virtual void speak() override\",\"threshold\":0.0}" 2>/dev/null)
+    end=$(date +%s%N)
+    elapsed=$(echo "scale=3; ($end - $start) / 1000000000" | bc)
+
+    log "  Search response: $(echo "$resp" | head -c 200)"
+    if echo "$resp" | grep -q "sources"; then
+        pass "UML search with sources: ${elapsed}s"
+    else
+        fail "UML search with sources failed"
+    fi
+
+    log "Step 6: Test with low threshold (more results)"
+    start=$(date +%s%N)
+    resp=$(curl -s --max-time 30 -X POST "${CLIENT_URL}/search_uml" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\":\"Animal class\",\"threshold\":0.0}" 2>/dev/null)
+    end=$(date +%s%N)
+    elapsed=$(echo "scale=3; ($end - $start) / 1000000000" | bc)
+
+    log "  Search response: $(echo "$resp" | head -c 200)"
+    if echo "$resp" | grep -q "name"; then
+        pass "UML search low threshold: ${elapsed}s"
+    else
+        fail "UML search low threshold failed"
+    fi
+
+    rm -f "${tmpfile}.cpp" "${tmpfile}.py" "${tmpfile}.puml" "$tmpfile"
+}
+
+test_phonebook_constructor() {
+    section "TEST: Abstract UML Constructor"
+
+    log "Step 1: Train abstract UML blocks"
+    local blocks=("DataTable" "ButtonAdd" "ButtonEdit" "ButtonDelete" "SearchField")
+    local schemas=("$(cat ${PROJECT_ROOT}/examples/uml/data_table.puml)"
+                   "$(cat ${PROJECT_ROOT}/examples/uml/button_add.puml)"
+                   "$(cat ${PROJECT_ROOT}/examples/uml/button_edit.puml)"
+                   "$(cat ${PROJECT_ROOT}/examples/uml/button_delete.puml)"
+                   "$(cat ${PROJECT_ROOT}/examples/uml/search_field.puml)")
+    local sources=("$(cat ${PROJECT_ROOT}/examples/c++/data_table.cpp)"
+                   "$(cat ${PROJECT_ROOT}/examples/c++/button_add.cpp)"
+                   "$(cat ${PROJECT_ROOT}/examples/c++/button_edit.cpp)"
+                   "$(cat ${PROJECT_ROOT}/examples/c++/button_delete.cpp)"
+                   "$(cat ${PROJECT_ROOT}/examples/c++/search_field.cpp)")
+
+    for i in "${!blocks[@]}"; do
+        local name="${blocks[$i]}"
+        local tmpfile=$(mktemp)
+        echo -n "${schemas[$i]}" > "${tmpfile}.puml"
+        echo -n "${sources[$i]}" > "${tmpfile}.cpp"
+
+        log "  Training block: ${name}"
+        local resp=$(curl -s --max-time 30 -X POST "${ADMIN_URL}/train_uml" \
+            -F "uml_name=${name}" \
+            -F "uml_file=@${tmpfile}.puml" \
+            -F "source_files[]=@${tmpfile}.cpp" \
+            -F "source_types[]=1" 2>/dev/null)
+
+        if echo "$resp" | grep -q '"status"'; then
+            pass "Train block: ${name}"
+        else
+            fail "Train block: ${name} - $(echo "$resp" | head -c 80)"
+        fi
+        rm -f "${tmpfile}.puml" "${tmpfile}.cpp" "$tmpfile"
+        sleep 1
+    done
+
+    log "Step 2: Wait for training to complete"
+    wait_training_done 120
+    sleep 2
+
+    log "Step 3: List available blocks"
+    local list_resp=$(curl -s --max-time 10 "${CLIENT_URL}/list_uml" 2>/dev/null)
+    log "  Blocks response: $(echo "$list_resp" | head -c 200)"
+    if echo "$list_resp" | grep -q "DataTable"; then
+        pass "List UML blocks"
+    else
+        fail "List UML blocks - expected DataTable in response"
+    fi
+
+    log "Step 4: Compose project from selected blocks"
+    local compose_resp=$(curl -s --max-time 10 -X POST "${CLIENT_URL}/compose" \
+        -H "Content-Type: application/json" \
+        -d '{"blocks":["DataTable","ButtonAdd","ButtonEdit"]}' 2>/dev/null)
+    log "  Compose response: $(echo "$compose_resp" | head -c 200)"
+    if echo "$compose_resp" | grep -q "combined_sources"; then
+        pass "Compose UML project"
+    else
+        fail "Compose UML project - expected combined_sources in response"
+    fi
+
+    log "Step 5: Verify data.db persists in build/"
+    if [[ -f "${BUILD_DIR}/data.db" ]]; then
+        pass "data.db persists in build/"
+    else
+        fail "data.db not found in build/"
+    fi
+}
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 print_summary() {
@@ -688,6 +945,8 @@ main() {
     test_large_doc_speed
     test_rapid_uploads
     test_e2e_pipeline
+    test_uml_neural_search
+    test_phonebook_constructor
 
     print_summary
 }

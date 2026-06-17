@@ -1,0 +1,13 @@
+@startuml ButtonAdd
+class ButtonAdd {
+    +void onClick()
+    +void bindToForm(Form f)
+}
+class Form {
+    +Map<String, String> fields
+    +void clear()
+    +String getField(String name)
+    +void setField(String name, String value)
+}
+ButtonAdd --> Form : reads fields
+@enduml

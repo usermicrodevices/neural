@@ -177,6 +177,20 @@ std::pair<int,double> NeuralNetwork::predict(const std::vector<double>& input) c
     return {idx, *max_it};
 }
 
+std::vector<double> NeuralNetwork::get_embedding(const std::vector<double>& input) const {
+    if ((int)input.size() != in) {
+        Logger::Error("NeuralNetwork::get_embedding: input size mismatch (expected {}, got {})", in, input.size());
+        return std::vector<double>(hn, 0.0);
+    }
+    std::vector<double> h(hn, 0.0);
+    for (int j = 0; j < hn; ++j) {
+        double sum = b1[j];
+        for (int i = 0; i < in; ++i) sum += W1[i * hn + j] * input[i];
+        h[j] = std::max(0.0, sum);
+    }
+    return h;
+}
+
 void NeuralNetwork::softmax(std::vector<double>& x) const {
     double max_val = *std::max_element(x.begin(), x.end());
     double sum = 0.0;

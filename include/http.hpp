@@ -63,9 +63,9 @@ static bool serve_static_file(asio::ip::tcp::socket& socket,
 {
     if (request_path.empty()) return false;
     if (request_path.find("..") != std::string::npos) return false;
-    //std::string path = get_executable_dir() + request_path;
     std::string path = request_path;
     if (path[0] == '/') path = path.substr(1);
+    if (!std::filesystem::exists(path) || !std::filesystem::is_regular_file(path)) return false;
     std::string body = read_file_into_string(path);
     std::string content_type = content_type_from_path(request_path);
     std::string resp = build_response(content_type, body);

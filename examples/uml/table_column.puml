@@ -1,0 +1,19 @@
+@startuml TableColumn
+class TableColumn {
+    +int index
+    +String title
+    +String dataType
+    +int width
+    +bool sortable
+    +bool visible
+    +void setTitle(String t)
+    +void setWidth(int w)
+    +void sort(Vector<TableRow> rows)
+    +void hide()
+    +void show()
+}
+class TableRow {
+    +Vector<Cell> cells
+}
+TableColumn --> TableRow : indexes into
+@enduml

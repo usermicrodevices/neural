@@ -1,0 +1,19 @@
+@startuml DataTable
+class Record {
+    +int id
+    +Map<String, String> fields
+    +void save()
+    +void remove()
+    +String get(String key)
+    +void set(String key, String value)
+}
+class DataTable {
+    +Vector<Record> rows
+    +void addRecord(Record r)
+    +void removeRecord(int id)
+    +Record findById(int id)
+    +Vector<Record> findAll()
+    +Vector<Record> findByField(String key, String value)
+}
+DataTable o-- Record : contains
+@enduml
